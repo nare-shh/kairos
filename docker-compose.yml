@@ -1,0 +1,93 @@
+# Docker Compose lets you run multiple containers as one system
+# Think of each "service" as a separate computer on the same private network
+# Note: "version" field is obsolete in modern Docker Compose — removed
+
+services:
+
+  # ─── PostgreSQL Database ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine        # Official Postgres image, alpine = lightweight
+    container_name: kairos_postgres
+    environment:
+      POSTGRES_USER: kairos_user
+      POSTGRES_PASSWORD: kairos_pass
+      POSTGRES_DB: kairos_db
+    ports:
+      - "5432:5432"                  # host_port:container_port
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # persist data across restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kairos_user -d kairos_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: kairos_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Zookeeper (required by Kafka) ────────────────────────────────────────
+  # Zookeeper manages Kafka's cluster metadata
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: kairos_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # ─── Kafka ────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kairos_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # INTERNAL: container-to-container communication
+      # EXTERNAL: host machine to container communication
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─── FastAPI Application ──────────────────────────────────────────────────
+  api:
+    build: .                         # Build from our Dockerfile in this directory
+    container_name: kairos_api
+    env_file: .env                   # Load environment variables from .env file
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy   # Wait for postgres to be ready
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app                       # Mount code into container — hot reload in dev
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    #                                                              ↑ --reload restarts
+    #                                                                on code changes
+
+# Named volumes — Docker manages storage for these
+# Data survives container restarts and removals
+volumes:
+  postgres_data:
+  redis_data:
