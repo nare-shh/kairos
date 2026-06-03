@@ -29,8 +29,21 @@ async def lifespan(app: FastAPI):
     # ── STARTUP ───────────────────────────────────────────────────────────────
     setup_logging()
 
-    # NOTE: Migrations run via scripts/start.sh BEFORE uvicorn starts.
-    # We do NOT call create_all() here — that's Alembic's job now.
+    # Verify DB connection on startup with retries
+    # Railway services can take a moment to be fully ready
+    import asyncio, logging
+    logger = logging.getLogger(__name__)
+    for attempt in range(10):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+            logger.info("Database connection verified")
+            break
+        except Exception as e:
+            if attempt == 9:
+                raise RuntimeError(f"Cannot connect to database after 10 attempts: {e}")
+            logger.warning(f"DB not ready (attempt {attempt+1}/10), retrying in 3s...")
+            await asyncio.sleep(3)
 
     await init_redis()
     await init_kafka_producer()
