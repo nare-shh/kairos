@@ -3,49 +3,49 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import auth
+from app.api.v1 import auth, products
 from app.core.config import settings
 from app.db.redis import close_redis, init_redis
 from app.db.session import Base, engine
-from app.models import user as _user_models  # noqa: F401 — imported so Base sees the table
+from app.events.publisher import close_kafka_producer, init_kafka_producer
+
+# Import all models so SQLAlchemy's Base knows about them before create_all
+# Without these imports, the tables won't be created
+from app.models import category as _category_models   # noqa: F401
+from app.models import event_store as _event_models   # noqa: F401
+from app.models import product as _product_models     # noqa: F401
+from app.models import user as _user_models           # noqa: F401
 
 
-# lifespan is a modern FastAPI pattern for startup/shutdown logic
-# Code before "yield" runs when the app starts
-# Code after "yield" runs when the app shuts down
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # STARTUP
-    # Create all database tables that don't exist yet
-    # In production you'd use Alembic migrations instead, but this is fine for dev
+    # ── STARTUP ───────────────────────────────────────────────────────────────
+    # Create all DB tables (users, products, categories, event_store)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Connect to Redis
     await init_redis()
+    await init_kafka_producer()    # Connect to Kafka (gracefully skips if unavailable)
 
-    print(f"Kairos starting in {settings.APP_ENV} mode")
+    print(f"✓ Kairos [{settings.APP_ENV}] ready — http://localhost:8000/docs")
 
-    yield  # App is now running and serving requests
+    yield  # ← app runs here
 
-    # SHUTDOWN
+    # ── SHUTDOWN ──────────────────────────────────────────────────────────────
+    await close_kafka_producer()
     await close_redis()
-    await engine.dispose()  # Close all database connections cleanly
+    await engine.dispose()
 
 
-# Create the FastAPI application instance
 app = FastAPI(
     title="Kairos",
     description="Intent-Driven Dynamic Pricing Commerce Engine",
     version="1.0.0",
-    # Swagger UI available at /docs, ReDoc at /redoc
-    docs_url="/docs" if settings.DEBUG else None,   # hide docs in production
+    docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
     lifespan=lifespan,
 )
 
-# CORS — controls which frontend URLs are allowed to call this API
-# In production, replace "*" with your actual frontend domain
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.DEBUG else ["https://yourfrontend.com"],
@@ -54,23 +54,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ─── Routers ──────────────────────────────────────────────────────────────────
-# include_router wires an APIRouter into the main app
-# prefix="/api/v1" is prepended to all routes inside the router
-# So auth's "/register" becomes "/api/v1/auth/register"
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(products.router, prefix="/api/v1")
 
 
-# Health check — the first endpoint every production API must have
-# Monitoring tools ping this to know if the service is alive
+# ─── System Endpoints ─────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"])
 async def health_check():
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "env": settings.APP_ENV,
-    }
+    return {"status": "healthy", "app": settings.APP_NAME, "env": settings.APP_ENV}
 
 
 @app.get("/", tags=["System"])
