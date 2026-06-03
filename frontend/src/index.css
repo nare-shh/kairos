@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #16161d; }
+  ::-webkit-scrollbar-thumb { background: #262633; border-radius: 3px; }
+}
+
+@layer utilities {
+  .price-flash { animation: priceFlash 0.6s ease-in-out; }
+}
