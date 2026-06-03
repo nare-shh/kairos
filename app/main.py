@@ -28,26 +28,11 @@ from app.models import user as _user_models           # noqa: F401
 async def lifespan(app: FastAPI):
     # ── STARTUP ───────────────────────────────────────────────────────────────
     setup_logging()
-
-    # Verify DB connection on startup with retries
-    # Railway services can take a moment to be fully ready
-    import asyncio, logging
-    logger = logging.getLogger(__name__)
-    for attempt in range(10):
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-            logger.info("Database connection verified")
-            break
-        except Exception as e:
-            if attempt == 9:
-                raise RuntimeError(f"Cannot connect to database after 10 attempts: {e}")
-            logger.warning(f"DB not ready (attempt {attempt+1}/10), retrying in 3s...")
-            await asyncio.sleep(3)
-
+    # Alembic already ran migrations (and proved DB is reachable) before uvicorn started
+    # No DB retry loop needed here — if alembic succeeded, DB is accessible
     await init_redis()
     await init_kafka_producer()
-    print(f"✓ Kairos [{settings.APP_ENV}] ready — http://localhost:8000/docs")
+    print(f"✓ Kairos [{settings.APP_ENV}] ready")
 
     yield  # ← app serves requests here
 

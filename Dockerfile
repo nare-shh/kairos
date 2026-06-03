@@ -12,9 +12,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . .
 
-# Fix line endings + make executable (handles Windows CRLF → Unix LF)
-RUN sed -i 's/\r//' scripts/start.sh && chmod +x scripts/start.sh
-
 EXPOSE 8000
 
-CMD ["scripts/start.sh"]
+# Run migrations then start the API
+# Using sh -c avoids ALL shell script / CRLF / permission issues
+# Railway injects $PORT automatically — we use it directly here
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

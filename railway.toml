@@ -1,31 +1,10 @@
-# railway.toml — Railway deployment configuration
-#
-# Railway reads this file to know how to build and run your app.
-# Without this file, Railway guesses — with it, you control everything.
-
 [build]
-# builder = DOCKERFILE: use our Dockerfile to build
-# Railway auto-detects this, but being explicit is better
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# startCommand: overrides the Dockerfile CMD for Railway
-# We run our startup script which: waits for DB → migrates → starts API
-startCommand = "scripts/start.sh"
-
-# healthcheckPath: Railway pings this URL to verify the deploy succeeded
-# If it returns 200 within healthcheckTimeout → deploy is live
-# If it never returns 200 → Railway rolls back to the previous version (zero-downtime!)
 healthcheckPath = "/health"
-healthcheckTimeout = 60   # seconds to wait for health check to pass
-
-# numReplicas: how many instances to run
-# 1 = fine for a portfolio project
-# 2+ = high availability (requires paid plan)
+healthcheckTimeout = 120
 numReplicas = 1
-
-# restartPolicyType = ON_FAILURE: restart if the app crashes
-# This is production-grade: if uvicorn crashes, Railway brings it back
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
