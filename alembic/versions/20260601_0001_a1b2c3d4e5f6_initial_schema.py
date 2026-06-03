@@ -16,18 +16,31 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _type_exists(conn, name: str) -> bool:
+    """Check pg_type catalog — works on all PostgreSQL versions."""
+    result = conn.execute(
+        sa.text("SELECT 1 FROM pg_type WHERE typname = :name"),
+        {"name": name},
+    )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
     conn = op.get_bind()
     existing = inspect(conn).get_table_names()
 
-    # IF NOT EXISTS handles Railway DBs that were partially set up by create_all()
-    op.execute("CREATE TYPE IF NOT EXISTS user_role_enum AS ENUM ('customer', 'seller', 'admin')")
-    op.execute("CREATE TYPE IF NOT EXISTS product_status_enum AS ENUM ('draft', 'active', 'inactive', 'deleted')")
-    op.execute(
-        "CREATE TYPE IF NOT EXISTS order_status_enum AS ENUM "
-        "('pending_payment','paid','processing','shipped','delivered',"
-        "'cancelled','payment_failed','refunded')"
-    )
+    # Create ENUM types only if they don't exist yet
+    # (pg_type query works on ALL PostgreSQL versions)
+    if not _type_exists(conn, "user_role_enum"):
+        op.execute("CREATE TYPE user_role_enum AS ENUM ('customer', 'seller', 'admin')")
+    if not _type_exists(conn, "product_status_enum"):
+        op.execute("CREATE TYPE product_status_enum AS ENUM ('draft', 'active', 'inactive', 'deleted')")
+    if not _type_exists(conn, "order_status_enum"):
+        op.execute(
+            "CREATE TYPE order_status_enum AS ENUM "
+            "('pending_payment','paid','processing','shipped','delivered',"
+            "'cancelled','payment_failed','refunded')"
+        )
 
     if "users" not in existing:
         op.create_table(
