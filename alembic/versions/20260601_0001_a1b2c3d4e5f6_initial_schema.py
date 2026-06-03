@@ -7,7 +7,8 @@ Create Date: 2026-06-01 00:00:00
 from typing import Sequence, Union
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from sqlalchemy import inspect
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy import inspect, text
 from alembic import op
 
 revision: str = "a1b2c3d4e5f6"
@@ -17,20 +18,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _type_exists(conn, name: str) -> bool:
-    """Check pg_type catalog — works on all PostgreSQL versions."""
+    """Query pg_type catalog — works on ALL PostgreSQL versions."""
     result = conn.execute(
-        sa.text("SELECT 1 FROM pg_type WHERE typname = :name"),
+        text("SELECT 1 FROM pg_type WHERE typname = :name"),
         {"name": name},
     )
     return result.fetchone() is not None
+
+
+# Pre-declare enum types with create_type=False
+# This tells SQLAlchemy: "these types already exist in the DB, do NOT create them"
+# Using postgresql.ENUM (not sa.Enum) — only the dialect-specific class respects create_type=False
+user_role = PGEnum("customer", "seller", "admin", name="user_role_enum", create_type=False)
+product_status = PGEnum("draft", "active", "inactive", "deleted", name="product_status_enum", create_type=False)
+order_status = PGEnum(
+    "pending_payment", "paid", "processing", "shipped", "delivered",
+    "cancelled", "payment_failed", "refunded",
+    name="order_status_enum", create_type=False
+)
 
 
 def upgrade() -> None:
     conn = op.get_bind()
     existing = inspect(conn).get_table_names()
 
-    # Create ENUM types only if they don't exist yet
-    # (pg_type query works on ALL PostgreSQL versions)
+    # Create enum types only if they don't exist (pg_type catalog is universal)
     if not _type_exists(conn, "user_role_enum"):
         op.execute("CREATE TYPE user_role_enum AS ENUM ('customer', 'seller', 'admin')")
     if not _type_exists(conn, "product_status_enum"):
@@ -49,7 +61,7 @@ def upgrade() -> None:
             sa.Column("email", sa.String(255), nullable=False),
             sa.Column("full_name", sa.String(255), nullable=True),
             sa.Column("hashed_password", sa.Text(), nullable=False),
-            sa.Column("role", sa.Enum("customer","seller","admin", name="user_role_enum", create_type=False), nullable=False, server_default="customer"),
+            sa.Column("role", user_role, nullable=False, server_default="customer"),
             sa.Column("is_active", sa.Boolean(), nullable=False, server_default="true"),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -84,7 +96,7 @@ def upgrade() -> None:
             sa.Column("max_price", sa.Numeric(10, 2), nullable=False),
             sa.Column("stock_quantity", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("low_stock_threshold", sa.Integer(), nullable=False, server_default="10"),
-            sa.Column("status", sa.Enum("draft","active","inactive","deleted", name="product_status_enum", create_type=False), nullable=False, server_default="draft"),
+            sa.Column("status", product_status, nullable=False, server_default="draft"),
             sa.Column("is_active", sa.Boolean(), nullable=False, server_default="false"),
             sa.Column("images", postgresql.JSONB(), nullable=False, server_default="'[]'"),
             sa.Column("attributes", postgresql.JSONB(), nullable=False, server_default="'{}'"),
@@ -126,7 +138,7 @@ def upgrade() -> None:
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column("order_number", sa.String(50), nullable=False),
             sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-            sa.Column("status", sa.Enum("pending_payment","paid","processing","shipped","delivered","cancelled","payment_failed","refunded", name="order_status_enum", create_type=False), nullable=False, server_default="pending_payment"),
+            sa.Column("status", order_status, nullable=False, server_default="pending_payment"),
             sa.Column("subtotal", sa.Numeric(12, 2), nullable=False),
             sa.Column("tax_amount", sa.Numeric(12, 2), nullable=False, server_default="0"),
             sa.Column("shipping_amount", sa.Numeric(12, 2), nullable=False, server_default="0"),
