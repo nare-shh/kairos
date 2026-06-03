@@ -1,0 +1,122 @@
+# CI Pipeline — runs on every push and pull request
+#
+# What is CI (Continuous Integration)?
+# ─────────────────────────────────────
+# Every time you push code, GitHub automatically:
+#   1. Spins up a fresh Linux server (the "runner")
+#   2. Checks out your code
+#   3. Runs your tests
+#   4. Reports pass/fail back to GitHub
+#
+# This catches bugs BEFORE they reach production.
+# If tests fail → the PR shows a red X → reviewer knows not to merge.
+# If tests pass → green checkmark → safe to merge.
+
+name: CI — Test & Lint
+
+# Triggers: run this workflow when...
+on:
+  push:
+    branches: ["main", "develop"]      # any push to main or develop
+  pull_request:
+    branches: ["main", "develop"]      # any PR targeting main or develop
+
+jobs:
+  test:
+    name: Run Tests
+    # runs-on: which OS to use for the runner
+    # ubuntu-latest = GitHub's free Linux servers
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Get the code ───────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+        # actions/checkout = official GitHub action to clone your repo
+
+      # ── Step 2: Set up Python ─────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # cache: pip — saves installed packages between runs (faster CI)
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      # ── Step 3: Install dependencies ──────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Step 4: Create a minimal .env for tests ───────────────────────────
+      # Tests need these env vars to import the app without crashing
+      - name: Create test environment file
+        run: |
+          cat > .env << 'EOF'
+          APP_NAME=Kairos
+          APP_ENV=test
+          DEBUG=true
+          DATABASE_URL=postgresql+asyncpg://test:test@localhost:5432/test_db
+          REDIS_URL=redis://localhost:6379
+          KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+          SECRET_KEY=test-secret-key-for-ci-only-not-real
+          ALGORITHM=HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES=30
+          REFRESH_TOKEN_EXPIRE_DAYS=7
+          STRIPE_SECRET_KEY=sk_test_placeholder
+          STRIPE_WEBHOOK_SECRET=whsec_placeholder
+          EOF
+
+      # ── Step 5: Run unit tests ────────────────────────────────────────────
+      # We run UNIT tests here — no DB, no Redis, no Kafka needed
+      # Unit tests test pure logic in isolation (like our pricing engine tests)
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --tb=short
+        # Note: integration tests (which need a real DB) would run separately
+        # using services: postgres / redis in the job definition
+
+      # ── Step 6: Verify all imports work ───────────────────────────────────
+      # Catches syntax errors and missing imports that tests might not catch
+      - name: Check application imports
+        run: |
+          python -c "
+          from app.core.config import settings
+          from app.core.security import hash_password, verify_password, create_access_token
+          from app.services.pricing_engine import PricingEngine, DEMAND_BANDS, INTENT_WEIGHTS
+          from app.events.types import ProductEvent, OrderEvent, IntentEvent
+          print('All imports OK')
+          "
+
+  # ── Separate job: Docker build check ──────────────────────────────────────
+  docker-build:
+    name: Verify Docker Build
+    runs-on: ubuntu-latest
+    # Only run this on pushes to main (not on every PR — saves CI minutes)
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create minimal .env for build
+        run: |
+          cp .env.example .env
+          # Replace placeholder values with test values
+          sed -i 's/your-super-secret-key-change-this-in-production/test-key-for-build-check/' .env
+
+      - name: Build Docker image
+        run: |
+          docker build -t kairos:ci-check .
+        # This verifies the Dockerfile is valid and all dependencies install
+        # If this fails → the build is broken → won't deploy
+
+      - name: Verify image starts
+        run: |
+          # Start the container with a health check command instead of the full app
+          # We just verify the image can start and Python can import the app
+          docker run --rm \
+            --env-file .env \
+            kairos:ci-check \
+            python -c "from app.main import app; print('App imports OK')"

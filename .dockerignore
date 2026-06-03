@@ -1,0 +1,49 @@
+# .dockerignore — files Docker SKIPS when building the image
+# This is like .gitignore but for Docker build context
+# Smaller context = faster builds (especially important in CI/CD)
+
+# Python cache — never needed in containers
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environments — the container installs its own
+.venv/
+venv/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# Git — not needed in the image
+.git/
+.gitignore
+
+# Test artifacts — not needed in production image
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# Documentation
+*.md
+docs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER build these into an image
+# (should be in .env which is also in .gitignore)
+.env
+.env.*
+!.env.example   # exception: example file is safe
+
+# Logs
+*.log
+logs/

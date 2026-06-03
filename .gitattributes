@@ -1,0 +1,23 @@
+# .gitattributes — line ending rules
+# Ensures shell scripts always have Unix line endings (LF)
+# regardless of the developer's OS
+
+# Default: auto-convert line endings
+* text=auto
+
+# Shell scripts MUST use LF — CRLF breaks bash scripts on Linux
+*.sh text eol=lf
+
+# Python and config files: LF
+*.py text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.env text eol=lf
+
+# Binary files: no line ending conversion
+*.png binary
+*.jpg binary
+*.ico binary

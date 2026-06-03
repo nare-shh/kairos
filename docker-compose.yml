@@ -82,9 +82,10 @@ services:
         condition: service_healthy
     volumes:
       - .:/app                       # Mount code into container — hot reload in dev
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    #                                                              ↑ --reload restarts
-    #                                                                on code changes
+    environment:
+      RELOAD: "1"                    # Passed to start.sh → enables --reload in dev
+    # start.sh: waits for DB → runs alembic migrations → starts uvicorn
+    # In dev: RELOAD=1 enables hot reload. In prod: RELOAD is unset → no reload
 
 # Named volumes — Docker manages storage for these
 # Data survives container restarts and removals
