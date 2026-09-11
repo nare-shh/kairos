@@ -1,6 +1,17 @@
 # Docker Compose lets you run multiple containers as one system
 # Think of each "service" as a separate computer on the same private network
 # Note: "version" field is obsolete in modern Docker Compose — removed
+#
+#   cp .env.example .env        # once
+#   docker compose up -d        # API :8000, frontend :5173
+#   docker compose exec api python -m app.seed   # demo data
+
+x-backend-env: &backend-env
+  # Inside the compose network, services are reached by NAME, not localhost
+  # These override the localhost URLs in .env (which are for running on the host)
+  DATABASE_URL: postgresql+asyncpg://kairos_user:kairos_pass@postgres:5432/kairos_db
+  REDIS_URL: redis://redis:6379
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
 
 services:
 
@@ -58,10 +69,12 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       # INTERNAL: container-to-container communication
       # EXTERNAL: host machine to container communication
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
@@ -73,6 +86,9 @@ services:
     build: .                         # Build from our Dockerfile in this directory
     container_name: kairos_api
     env_file: .env                   # Load environment variables from .env file
+    environment:
+      <<: *backend-env
+      RELOAD: "1"                    # Dockerfile CMD → uvicorn --reload (dev only)
     ports:
       - "8000:8000"
     depends_on:
@@ -80,12 +96,44 @@ services:
         condition: service_healthy   # Wait for postgres to be ready
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_started   # Kafka is optional — the API degrades gracefully
     volumes:
       - .:/app                       # Mount code into container — hot reload in dev
+    # CMD (Dockerfile): alembic upgrade head → uvicorn
+
+  # ─── Event Worker (Kafka consumer) ────────────────────────────────────────
+  # Consumes intent events → maintains the "trending" leaderboard in Redis
+  worker:
+    build: .
+    container_name: kairos_worker
+    command: python -m app.consumers.worker
+    env_file: .env
     environment:
-      RELOAD: "1"                    # Passed to start.sh → enables --reload in dev
-    # start.sh: waits for DB → runs alembic migrations → starts uvicorn
-    # In dev: RELOAD=1 enables hot reload. In prod: RELOAD is unset → no reload
+      <<: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started   # the worker retries until Kafka accepts connections
+    restart: unless-stopped
+
+  # ─── React Frontend (Vite dev server) ─────────────────────────────────────
+  frontend:
+    image: node:22-alpine
+    container_name: kairos_frontend
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      # The BROWSER calls the API, so this is localhost — not the "api" service name
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules            # keep container's node_modules separate from the host's
+    depends_on:
+      - api
 
 # Named volumes — Docker manages storage for these
 # Data survives container restarts and removals

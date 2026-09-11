@@ -1,7 +1,12 @@
-import { Link, useNavigate } from 'react-router-dom'
-import { ShoppingCart, Zap, LogOut, User, BarChart2 } from 'lucide-react'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
+import { ShoppingCart, Zap, LogOut, User, BarChart2, Receipt } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useCart } from '../context/CartContext'
+
+const navLink = ({ isActive }) =>
+  `hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+    isActive ? 'text-white bg-surface-700' : 'text-slate-400 hover:text-white hover:bg-surface-700'
+  }`
 
 export default function Navbar() {
   const { user, logout } = useAuth()
@@ -9,6 +14,7 @@ export default function Navbar() {
   const navigate         = useNavigate()
 
   const handleLogout = () => { logout(); navigate('/') }
+  const canSell = user?.role === 'seller' || user?.role === 'admin'
 
   return (
     <nav className="sticky top-0 z-50 border-b border-surface-700 bg-surface-900/80 backdrop-blur-md">
@@ -30,20 +36,31 @@ export default function Navbar() {
         {/* Right side */}
         <div className="flex items-center gap-2">
 
-          {user?.role === 'seller' && (
-            <Link to="/dashboard"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-surface-700 transition-colors">
+          {canSell && (
+            <NavLink to="/dashboard" className={navLink}>
               <BarChart2 className="w-4 h-4" />
               Dashboard
-            </Link>
+            </NavLink>
+          )}
+
+          {user && (
+            <NavLink to="/orders" className={navLink}>
+              <Receipt className="w-4 h-4" />
+              Orders
+            </NavLink>
           )}
 
           {user ? (
             <>
-              <span className="hidden sm:block text-sm text-slate-400 px-2">
+              <span className="hidden md:flex items-center gap-2 text-sm text-slate-400 px-2">
                 {user.full_name || user.email.split('@')[0]}
+                {user.role !== 'customer' && (
+                  <span className="px-1.5 py-0.5 rounded bg-brand-600/20 text-brand-500 text-[10px] font-semibold uppercase tracking-wide">
+                    {user.role}
+                  </span>
+                )}
               </span>
-              <button onClick={handleLogout}
+              <button onClick={handleLogout} aria-label="Sign out" title="Sign out"
                 className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-700 transition-colors">
                 <LogOut className="w-4 h-4" />
               </button>
@@ -57,7 +74,7 @@ export default function Navbar() {
           )}
 
           {/* Cart */}
-          <Link to="/cart" className="relative p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-700 transition-colors">
+          <Link to="/cart" aria-label="Cart" className="relative p-2 rounded-lg text-slate-400 hover:text-white hover:bg-surface-700 transition-colors">
             <ShoppingCart className="w-5 h-5" />
             {itemCount > 0 && (
               <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-brand-600 rounded-full text-[10px] font-bold flex items-center justify-center text-white">

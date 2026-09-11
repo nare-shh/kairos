@@ -1,9 +1,13 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.events.types import IntentEvent
+
+# Only the server may record purchases (when a payment actually succeeds).
+# Otherwise anyone could POST fake PurchaseCompleted events to inflate prices.
+SERVER_ONLY_EVENTS = {IntentEvent.PURCHASE_COMPLETED}
 
 
 class IntentTrackRequest(BaseModel):
@@ -37,6 +41,13 @@ class IntentTrackRequest(BaseModel):
         default_factory=dict,
         description="Extra context: page_source, device_type, time_on_page, etc.",
     )
+
+    @field_validator("event_type")
+    @classmethod
+    def client_event_only(cls, v: IntentEvent) -> IntentEvent:
+        if v in SERVER_ONLY_EVENTS:
+            raise ValueError(f"{v} is recorded by the server when a payment succeeds")
+        return v
 
 
 class IntentScoreResponse(BaseModel):

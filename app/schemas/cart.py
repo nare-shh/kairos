@@ -11,7 +11,7 @@ class CartAddRequest(BaseModel):
 
 class CartUpdateRequest(BaseModel):
     product_id: uuid.UUID
-    quantity: int = Field(..., ge=0, description="Set to 0 to remove item from cart")
+    quantity: int = Field(..., ge=0, le=100, description="Set to 0 to remove item from cart")
 
 
 class CartItemResponse(BaseModel):
@@ -19,10 +19,12 @@ class CartItemResponse(BaseModel):
     product_name: str
     sku: str
     quantity: int
-    unit_price: Decimal       # current_price when item was added (may have changed since!)
+    unit_price: Decimal        # LIVE Kairos price — what checkout will charge
+    added_unit_price: Decimal  # price when the item was put in the cart
+    price_changed: bool        # unit_price != added_unit_price
     total_price: Decimal
     stock_available: int
-    is_in_stock: bool
+    is_in_stock: bool          # False if sold out, deactivated or deleted
 
 
 class CartResponse(BaseModel):

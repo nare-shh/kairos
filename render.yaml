@@ -1,0 +1,57 @@
+# Render Blueprint — deploys the whole stack on Render's free tier.
+# Render dashboard → New → Blueprint → select this repo (or use the README's
+# "Deploy to Render" button). Every push to main redeploys.
+#
+# Free-tier notes: the web service sleeps after 15 min without traffic (the next
+# visit takes ~1 min to wake it), and the free Postgres expires after 30 days
+# unless upgraded. Kafka isn't available here, so it's disabled (the app works
+# without it; only "Trending now" stays empty).
+
+services:
+  # API + built React frontend, one service, one URL
+  - type: web
+    name: kairos
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kairos-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: kairos-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: KAFKA_ENABLED
+        value: "false"
+      # Idempotent demo store + demo accounts (see app/seed.py)
+      - key: SEED_DEMO_DATA
+        value: "true"
+
+  # Redis-compatible store: demand windows, carts, pub/sub for live prices
+  - type: keyvalue
+    name: kairos-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: volatile-lru   # evict expiring keys (carts, signals) first
+    ipAllowList: []                 # reachable only from services in this account
+
+databases:
+  - name: kairos-db
+    plan: free
+    region: singapore
+    databaseName: kairos
+    user: kairos
+    ipAllowList: []                 # reachable only from services in this account

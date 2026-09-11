@@ -6,6 +6,7 @@ from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -116,7 +117,7 @@ class AuthService:
             access_token=access_token,
             refresh_token=refresh_token,
             token_type="bearer",
-            expires_in=60 * 30,    # 30 minutes in seconds
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,    # 30 minutes in seconds
         )
 
     async def refresh_access_token(self, refresh_token: str) -> AccessTokenResponse:
@@ -155,7 +156,7 @@ class AuthService:
         new_access_token = create_access_token(str(user.id), user.role)
         return AccessTokenResponse(
             access_token=new_access_token,
-            expires_in=60 * 30,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
 
@@ -191,12 +192,13 @@ async def get_current_user(
         if user_id is None or token_type != "access":
             raise credentials_exception
 
-    except JWTError:
+        user_uuid = uuid.UUID(user_id)
+    except (JWTError, ValueError):
         raise credentials_exception
 
     # Fetch user from DB to ensure they still exist and are active
     result = await db.execute(
-        select(User).where(User.id == uuid.UUID(user_id))
+        select(User).where(User.id == user_uuid)
     )
     user = result.scalar_one_or_none()
 

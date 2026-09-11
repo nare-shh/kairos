@@ -21,6 +21,7 @@ Example:
 """
 
 import json
+import uuid
 from decimal import Decimal
 
 import redis.asyncio as aioredis
@@ -44,25 +45,28 @@ class CartService:
     def _key(self, user_id: str) -> str:
         return CART_KEY.format(user_id=user_id)
 
-    # ── Add item ───────────────────────────────────────────────────────────────
-    async def add_item(self, user_id: str, data: CartAddRequest) -> CartResponse:
-        """
-        Add a product to the cart (or increase quantity if already there).
-
-        We store the CURRENT dynamic price at the time of adding.
-        This means if the price changes while the item sits in cart,
-        the stored price is stale — we re-validate at checkout.
-        """
-        # Fetch live product data
+    async def _get_active_product(self, product_id: uuid.UUID) -> Product:
         result = await self.db.execute(
             select(Product).where(
-                Product.id == data.product_id,
+                Product.id == product_id,
                 Product.is_active == True,  # noqa: E712
             )
         )
         product = result.scalar_one_or_none()
         if not product:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+        return product
+
+    # ── Add item ───────────────────────────────────────────────────────────────
+    async def add_item(self, user_id: str, data: CartAddRequest) -> CartResponse:
+        """
+        Add a product to the cart (or increase quantity if already there).
+
+        We store the CURRENT dynamic price at the time of adding.
+        The cart view always shows the live price next to it, and checkout
+        charges the live price.
+        """
+        product = await self._get_active_product(data.product_id)
 
         if product.stock_quantity < data.quantity:
             raise HTTPException(
@@ -93,7 +97,6 @@ class CartService:
                 "unit_price": str(product.current_price),   # dynamic price snapshot
                 "product_name": product.name,
                 "sku": product.sku,
-                "stock_available": product.stock_quantity,
             }
 
         # HSET: set a field in the Redis hash
@@ -119,6 +122,12 @@ class CartService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Item not found in cart",
                 )
+            product = await self._get_active_product(data.product_id)
+            if data.quantity > product.stock_quantity:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Only {product.stock_quantity} in stock",
+                )
             item = json.loads(existing_raw)
             item["quantity"] = data.quantity
             await self.redis.hset(key, product_id_str, json.dumps(item))
@@ -129,9 +138,9 @@ class CartService:
     # ── Get cart ───────────────────────────────────────────────────────────────
     async def get_cart(self, user_id: str) -> CartResponse:
         """
-        Read the full cart and enrich with LIVE stock data from PostgreSQL.
-        We re-fetch products to show current stock availability
-        (items might have gone out of stock since they were added).
+        Read the full cart and enrich it with LIVE product data from PostgreSQL:
+        current Kairos price, stock, and availability (items may have been
+        repriced, sold out or deactivated since they were added).
         """
         key = self._key(user_id)
         # HGETALL: get ALL fields and values from the Redis hash
@@ -147,35 +156,34 @@ class CartService:
             )
 
         # Fetch live product data for all cart items in ONE query (not N queries)
-        product_ids = [item_id for item_id in raw_items.keys()]
-        result = await self.db.execute(
-            select(Product).where(Product.sku.in_(
-                # We'll match by product_id via a different approach
-                # Re-fetch using IDs
-                []
-            ))
-        )
+        products = await self._load_products(list(raw_items.keys()))
 
-        # Fetch each product by ID (small carts — N+1 is acceptable here)
         items = []
         subtotal = Decimal("0.00")
 
         for product_id_str, item_raw in raw_items.items():
             item_data = json.loads(item_raw)
             qty = item_data["quantity"]
-            unit_price = Decimal(item_data["unit_price"])
+            added_price = Decimal(item_data["unit_price"])
+
+            product = products.get(product_id_str)
+            available = product is not None and product.is_active
+            unit_price = product.current_price if available else added_price
+            stock = product.stock_quantity if available else 0
             total = unit_price * qty
             subtotal += total
 
             items.append(CartItemResponse(
                 product_id=product_id_str,
-                product_name=item_data["product_name"],
-                sku=item_data["sku"],
+                product_name=product.name if product else item_data["product_name"],
+                sku=product.sku if product else item_data["sku"],
                 quantity=qty,
                 unit_price=unit_price,
+                added_unit_price=added_price,
+                price_changed=unit_price != added_price,
                 total_price=total,
-                stock_available=item_data.get("stock_available", 0),
-                is_in_stock=item_data.get("stock_available", 0) >= qty,
+                stock_available=stock,
+                is_in_stock=available and stock >= qty,
             ))
 
         return CartResponse(
@@ -185,6 +193,18 @@ class CartService:
             subtotal=subtotal,
             is_empty=False,
         )
+
+    async def _load_products(self, product_ids: list[str]) -> dict[str, Product]:
+        ids = []
+        for product_id in product_ids:
+            try:
+                ids.append(uuid.UUID(product_id))
+            except ValueError:
+                continue
+        if not ids:
+            return {}
+        result = await self.db.execute(select(Product).where(Product.id.in_(ids)))
+        return {str(p.id): p for p in result.scalars().all()}
 
     # ── Clear cart ─────────────────────────────────────────────────────────────
     async def clear_cart(self, user_id: str) -> None:
