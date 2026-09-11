@@ -34,9 +34,12 @@ tests/
 *.md
 docs/
 
-# Frontend — runs in its own container / is deployed separately
-frontend/
+# Frontend build inputs are needed (the image builds the SPA) — but not local installs/builds
 node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
 
 # Local database data
 .localdb/

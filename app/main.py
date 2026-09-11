@@ -1,10 +1,12 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -30,6 +32,9 @@ from app.models import user as _user_models           # noqa: F401
 logger = logging.getLogger(__name__)
 
 APP_VERSION = "1.1.0"
+
+# Built React app — the Docker image builds it here. Absent in local dev (Vite serves it).
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -168,6 +173,26 @@ async def health_check():
     )
 
 
-@app.get("/", tags=["System"])
-async def root():
-    return {"message": "Welcome to Kairos — Intent-Driven Dynamic Pricing Engine"}
+# ── Frontend (production) ─────────────────────────────────────────────────────
+# One service serves the SPA and the API from the same origin — no CORS, and the
+# frontend needs no API URL. Must stay LAST: the catch-all only sees unmatched paths.
+API_PREFIXES = ("api/", "ws/", "docs", "redoc", "openapi.json", "health")
+
+if FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        # Unknown API paths stay real 404s instead of returning the HTML app
+        if full_path.startswith(API_PREFIXES):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+        # Real files (favicon, ...) — resolved strictly inside dist, never outside it
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and candidate.is_relative_to(FRONTEND_DIST.resolve()):
+            return FileResponse(candidate)
+        # Everything else is a client-side route (/products/..., /orders, ...)
+        return FileResponse(FRONTEND_DIST / "index.html")
+else:
+    @app.get("/", tags=["System"])
+    async def root():
+        return {"message": "Welcome to Kairos — Intent-Driven Dynamic Pricing Engine"}

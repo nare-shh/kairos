@@ -1,7 +1,9 @@
 import axios from 'axios'
 
-// Local dev default — production builds set VITE_API_URL (see frontend/.env.example)
-const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+// Dev: the API runs on :8000. Production: the API serves this app, so it's the same origin.
+// VITE_API_URL overrides both (e.g. when the frontend is hosted separately, like on Vercel).
+const DEFAULT_API = import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin
+const BASE = (import.meta.env.VITE_API_URL || DEFAULT_API).replace(/\/$/, '')
 
 const TOKEN_KEY = 'kairos_token'
 const REFRESH_KEY = 'kairos_refresh'

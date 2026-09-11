@@ -237,7 +237,18 @@ tests/             unit + API integration tests
 
 ## Deployment
 
-**Backend (Railway, Render, Fly…)** — the `Dockerfile` runs migrations and starts Uvicorn on `$PORT`
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/nare-shh/kairos)
+
+**Render (free, one click).** `render.yaml` is a Blueprint that creates the web service (API + built frontend
+on one URL), a free PostgreSQL and a free Redis-compatible Key Value, generates `SECRET_KEY`, and seeds the demo
+store on start (`SEED_DEMO_DATA=true`). Click the button (or *New → Blueprint* in the Render dashboard), pick the
+repo, and *Apply*. Every push to `main` redeploys. Free-tier caveats: the service sleeps after 15 minutes idle
+(~1 minute to wake) and the free database expires after 30 days unless upgraded.
+
+The Docker image builds the React app and FastAPI serves it, so in production the frontend calls the API on
+its own origin — no `VITE_API_URL` or CORS setup needed.
+
+**Other hosts (Railway, Fly…)** — the same `Dockerfile` runs migrations and starts Uvicorn on `$PORT`
 (`railway.toml` is included). Provision PostgreSQL and Redis, then set:
 `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `APP_ENV=production`, `DEBUG=false`,
 `CORS_ORIGINS=https://<your-frontend>`, `KAFKA_ENABLED=false` (unless you run Kafka), and Stripe keys.
