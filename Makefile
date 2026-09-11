@@ -1,6 +1,6 @@
 # Kairos — Developer Commands
 # Run: make <command>
-# Example: make up  |  make migrate  |  make logs
+# Example: make up  |  make seed  |  make logs
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 up:
@@ -10,16 +10,31 @@ down:
 	docker-compose down
 
 build:
-	docker-compose build api
+	docker-compose build api worker
 
 rebuild:
-	docker-compose build --no-cache api
+	docker-compose build --no-cache api worker
 
 logs:
 	docker-compose logs -f api
 
+worker-logs:
+	docker-compose logs -f worker
+
+frontend-logs:
+	docker-compose logs -f frontend
+
 restart:
-	docker-compose restart api
+	docker-compose restart api worker
+
+# ── Seed Data ─────────────────────────────────────────────────────────────────
+seed:
+	# Demo users (admin / seller / customer), categories and products — idempotent
+	docker-compose exec api python -m app.seed
+
+create-admin:
+	# Usage: make create-admin email="you@example.com" password="Secret123"
+	docker-compose exec api python -m app.seed create-admin "$(email)" "$(password)"
 
 # ── Alembic Migrations ────────────────────────────────────────────────────────
 # These run INSIDE the api container where alembic is installed
@@ -52,16 +67,19 @@ db-shell:
 
 db-reset:
 	# WARNING: Drops and recreates the database. Dev only!
-	docker-compose exec postgres psql -U kairos_user -c "DROP DATABASE IF EXISTS kairos_db;"
-	docker-compose exec postgres psql -U kairos_user -c "CREATE DATABASE kairos_db;"
+	docker-compose exec postgres psql -U kairos_user -d postgres -c "DROP DATABASE IF EXISTS kairos_db WITH (FORCE);"
+	docker-compose exec postgres psql -U kairos_user -d postgres -c "CREATE DATABASE kairos_db;"
 	make migrate
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+# API tests use a separate kairos_test database (created automatically)
+TEST_DB = postgresql+asyncpg://kairos_user:kairos_pass@postgres:5432/kairos_test
+
 test:
-	docker-compose exec api pytest tests/ -v
+	docker-compose exec -e TEST_DATABASE_URL=$(TEST_DB) api pytest tests/ -v
 
 test-coverage:
-	docker-compose exec api pytest tests/ --cov=app --cov-report=html
+	docker-compose exec -e TEST_DATABASE_URL=$(TEST_DB) api pytest tests/ --cov=app --cov-report=html
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 health:
@@ -73,5 +91,6 @@ routes:
 shell:
 	docker-compose exec api python
 
-.PHONY: up down build rebuild logs restart migrate rollback migration-status \
-        new-migration migration-sql db-shell db-reset test test-coverage health routes shell
+.PHONY: up down build rebuild logs worker-logs frontend-logs restart seed create-admin \
+        migrate rollback migration-status new-migration migration-sql db-shell db-reset \
+        test test-coverage health routes shell

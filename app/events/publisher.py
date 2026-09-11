@@ -31,6 +31,10 @@ async def init_kafka_producer() -> None:
     Creates a connection pool to Kafka brokers.
     """
     global _producer
+    if not settings.KAFKA_ENABLED:
+        logger.info("Kafka disabled (KAFKA_ENABLED=false) — events are stored but not streamed")
+        return
+
     try:
         _producer = AIOKafkaProducer(
             bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
@@ -49,10 +53,15 @@ async def init_kafka_producer() -> None:
         )
         await _producer.start()
         logger.info("Kafka producer connected")
-    except KafkaConnectionError as e:
+    except (KafkaConnectionError, OSError) as e:
         # In development, Kafka might not be ready yet — log but don't crash
         # The app can still work; events just won't be published
         logger.warning(f"Kafka not available: {e}. Events will be stored but not streamed.")
+        if _producer is not None:
+            try:
+                await _producer.stop()   # release the half-open client
+            except Exception:
+                pass
         _producer = None
 
 
@@ -94,9 +103,9 @@ async def publish_event(
     Consumers (pricing engine, fraud detector, etc.) receive this and act on it.
     """
     if _producer is None:
-        # Kafka not available — log and skip (graceful degradation)
+        # Kafka not available — skip (graceful degradation)
         # The event is still saved to event_store in the DB, just not streamed
-        logger.warning(f"Kafka unavailable — event {event_type} not streamed (saved to DB)")
+        logger.debug(f"Kafka unavailable — event {event_type} not streamed (saved to DB)")
         return
 
     message = {

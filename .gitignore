@@ -1,5 +1,8 @@
 # Never commit these — they contain secrets
 .env
+.env.local
+frontend/.env
+frontend/.env.local
 
 # Python
 __pycache__/
@@ -9,9 +12,16 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Node / frontend build
+node_modules/
+frontend/dist/
+
 # IDE
 .vscode/
 .idea/
+
+# Local throwaway database data
+.localdb/
 
 # Testing
 .pytest_cache/

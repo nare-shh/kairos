@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import redis.asyncio as aioredis
 
+from app.core.rate_limit import limiter
 from app.db.redis import get_redis
 from app.db.session import get_db
 from app.models.user import User
@@ -14,18 +15,22 @@ from app.services.intent_service import IntentService
 
 router = APIRouter(prefix="/intent", tags=["Intent & Pricing"])
 
+# Intent events move prices — throttle them per client so nobody can
+# script thousands of fake "CartAdded" events to force a surge.
+TRACK_RATE_LIMIT = "60/minute"
+
 
 # ─── POST /intent/track — Record a user behavior event ───────────────────────
 @router.post(
     "/track",
     summary="Track a user intent event",
 )
+@limiter.limit(TRACK_RATE_LIMIT)
 async def track_intent(
+    request: Request,   # required by the rate limiter
     payload: IntentTrackRequest,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
-    # Optional auth — anonymous users can also generate intent events
-    # We use a try/except approach via Optional dependency
 ):
     """
     Record a user interaction with a product.
@@ -38,7 +43,8 @@ async def track_intent(
     - Adds to wishlist (`WishlistAdded`)
     - Starts checkout (`CheckoutStarted`)
     - Abandons checkout (`CheckoutAbandoned`)
-    - Completes purchase (`PurchaseCompleted`)
+
+    `PurchaseCompleted` is recorded by the server when a payment succeeds.
 
     The pricing engine will immediately re-score the product and
     adjust the current price if demand thresholds are crossed.
@@ -48,12 +54,14 @@ async def track_intent(
     return await service.track(payload, user_id=None)
 
 
-# ─── POST /intent/track (authenticated) ──────────────────────────────────────
+# ─── POST /intent/track/authenticated ────────────────────────────────────────
 @router.post(
     "/track/authenticated",
     summary="Track intent event (authenticated user)",
 )
+@limiter.limit(TRACK_RATE_LIMIT)
 async def track_intent_authenticated(
+    request: Request,   # required by the rate limiter
     payload: IntentTrackRequest,
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
@@ -81,7 +89,7 @@ async def get_demand_score(
     current_user: User = Depends(require_role("seller", "admin")),
 ):
     """
-    **Seller Dashboard endpoint.**
+    **Seller Dashboard endpoint.** (Sellers: own products only.)
 
     Returns the current demand intelligence for a product:
     - `demand_score`: aggregated weighted score (last 1 hour)
@@ -93,4 +101,4 @@ async def get_demand_score(
     - `base_price`: what the seller originally set
     """
     service = IntentService(db, redis)
-    return await service.get_demand_score(product_id)
+    return await service.get_demand_score(product_id, current_user)

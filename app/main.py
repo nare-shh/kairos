@@ -1,4 +1,6 @@
-from contextlib import asynccontextmanager
+import asyncio
+import logging
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,15 +8,17 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
 
 from app.api.v1 import auth, cart, categories, intent, orders, products, webhooks
 from app.api.v1 import websocket as ws
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.rate_limit import limiter
-from app.db.redis import close_redis, init_redis
-from app.db.session import Base, engine
+from app.db.redis import close_redis, get_redis_or_none, init_redis
+from app.db.session import engine
 from app.events.publisher import close_kafka_producer, init_kafka_producer
+from app.services.repricer import repricer_loop
 
 # Import all models — required so SQLAlchemy's Base registers all tables
 from app.models import category as _category_models   # noqa: F401
@@ -22,6 +26,10 @@ from app.models import event_store as _event_models   # noqa: F401
 from app.models import order as _order_models         # noqa: F401
 from app.models import product as _product_models     # noqa: F401
 from app.models import user as _user_models           # noqa: F401
+
+logger = logging.getLogger(__name__)
+
+APP_VERSION = "1.1.0"
 
 
 @asynccontextmanager
@@ -32,11 +40,21 @@ async def lifespan(app: FastAPI):
     # No DB retry loop needed here — if alembic succeeded, DB is accessible
     await init_redis()
     await init_kafka_producer()
-    print(f"✓ Kairos [{settings.APP_ENV}] ready")
+
+    # Background repricer: lets prices decay once demand signals expire
+    repricer_task = None
+    if settings.REPRICE_INTERVAL_SECONDS > 0:
+        repricer_task = asyncio.create_task(repricer_loop(settings.REPRICE_INTERVAL_SECONDS))
+
+    logger.info(f"Kairos [{settings.APP_ENV}] ready")
 
     yield  # ← app serves requests here
 
     # ── SHUTDOWN ──────────────────────────────────────────────────────────────
+    if repricer_task:
+        repricer_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await repricer_task
     await close_kafka_producer()
     await close_redis()
     await engine.dispose()
@@ -53,15 +71,15 @@ Kairos adjusts product prices in **real-time** based on user demand signals.
 | Module | Endpoints | Description |
 |--------|-----------|-------------|
 | Auth | `/api/v1/auth/*` | Register, login, JWT tokens |
-| Products | `/api/v1/products/*` | Catalog with full event history |
+| Products | `/api/v1/products/*` | Catalog, seller management, full event history, price history |
 | Categories | `/api/v1/categories/*` | Product category tree |
 | Intent | `/api/v1/intent/*` | Track demand signals → trigger pricing |
-| Cart | `/api/v1/cart` | Redis-backed shopping cart |
-| Orders | `/api/v1/orders/*` | Checkout with Stripe payments |
+| Cart | `/api/v1/cart` | Redis-backed shopping cart with live prices |
+| Orders | `/api/v1/orders/*` | Checkout, Stripe (or mock) payments, cancel, fulfilment |
 | Webhooks | `/api/v1/webhooks/stripe` | Stripe payment events |
-| WebSocket | `/ws/prices/{id}` | Live price updates |
+| WebSocket | `/ws/prices/{id}`, `/ws/dashboard` | Live price updates |
     """,
-    version="1.0.0",
+    version=APP_VERSION,
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
     lifespan=lifespan,
@@ -74,9 +92,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# Production origins come from CORS_ORIGINS (comma-separated)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.DEBUG else ["https://yourfrontend.com"],
+    allow_origins=["*"] if settings.DEBUG else settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -92,8 +111,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     Without this: FastAPI returns the full Python traceback to the client —
     which leaks internal details that attackers can exploit.
     """
-    import logging
-    logger = logging.getLogger(__name__)
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
 
     return JSONResponse(
@@ -119,15 +136,36 @@ app.include_router(ws.router)
 async def health_check():
     """
     Health check endpoint — pinged by Railway/load balancers every 30s.
-    Returns 200 = instance is healthy.
+    Returns 200 = instance is healthy (database + Redis reachable).
     Returns 503 = instance is unhealthy → remove from rotation.
     """
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "version": "1.0.0",
-        "env": settings.APP_ENV,
-    }
+    checks = {"database": "ok", "redis": "ok"}
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception:
+        checks["database"] = "unavailable"
+
+    try:
+        redis = get_redis_or_none()
+        if redis is None:
+            raise RuntimeError("Redis not initialized")
+        await redis.ping()
+    except Exception:
+        checks["redis"] = "unavailable"
+
+    healthy = all(value == "ok" for value in checks.values())
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "status": "healthy" if healthy else "unhealthy",
+            "app": settings.APP_NAME,
+            "version": APP_VERSION,
+            "env": settings.APP_ENV,
+            "checks": checks,
+        },
+    )
 
 
 @app.get("/", tags=["System"])

@@ -10,21 +10,31 @@ But only Stripe knows the webhook signing secret.
 We verify the signature on every request — if it doesn't match, we reject it.
 This prevents attackers from faking payment success events.
 
-To test locally: use the Stripe CLI
+Unsigned events are accepted ONLY in local mock-payment mode
+(DEBUG=true and no real Stripe key) so the flow can be exercised with curl.
+
+To test locally with real Stripe: use the Stripe CLI
     stripe listen --forward-to localhost:8000/api/v1/webhooks/stripe
 """
 
+import json
 import logging
 
 import stripe
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.core.config import settings
+from app.db.redis import get_redis_or_none
 from app.db.session import AsyncSessionLocal
 from app.services.order_service import OrderService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+HANDLED_EVENTS = {
+    "payment_intent.succeeded",
+    "payment_intent.payment_failed",
+}
 
 
 @router.post("/stripe", summary="Stripe payment webhook")
@@ -43,9 +53,8 @@ async def stripe_webhook(request: Request):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
-    # Verify the webhook signature
-    # This proves the request came from Stripe, not an attacker
-    if settings.STRIPE_WEBHOOK_SECRET and not settings.STRIPE_WEBHOOK_SECRET.startswith("whsec_placeholder"):
+    if settings.stripe_webhook_enabled:
+        # Verify the webhook signature — proves the request came from Stripe
         try:
             event = stripe.Webhook.construct_event(
                 payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
@@ -57,42 +66,46 @@ async def stripe_webhook(request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid webhook signature",
             )
-        except Exception as e:
-            logger.error(f"Webhook parse error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    else:
-        # Dev mode: skip signature verification (no real Stripe key configured)
-        import json
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+    elif settings.DEBUG and not settings.stripe_enabled:
+        # Local mock-payment mode: no real money involved, accept unsigned JSON
         try:
             event = json.loads(payload)
-        except Exception:
+        except json.JSONDecodeError:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+    else:
+        # Real payments (or production) without a signing secret: refuse rather
+        # than trust unsigned "payment succeeded" events
+        logger.error("Stripe webhook received but STRIPE_WEBHOOK_SECRET is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook signing secret not configured",
+        )
 
-    event_type = event.get("type") if isinstance(event, dict) else event.type
-    event_data = event.get("data") if isinstance(event, dict) else event.data
+    # stripe.Event is dict-like, so the same access works in both modes
+    event_type = event.get("type")
+    event_data = event.get("data") or {}
 
     logger.info(f"Stripe webhook received: {event_type}")
 
-    # Only process payment events we care about
-    handled_events = {
-        "payment_intent.succeeded",
-        "payment_intent.payment_failed",
-    }
-
-    if event_type in handled_events:
+    if event_type in HANDLED_EVENTS:
         # Use a fresh DB session for webhook processing
         # We can't use the request-scoped session here (webhooks come from Stripe, not users)
         async with AsyncSessionLocal() as db:
             try:
-                service = OrderService(db)
+                service = OrderService(db, redis=get_redis_or_none())
                 await service.handle_stripe_webhook(event_type, event_data)
                 await db.commit()
                 logger.info(f"Webhook {event_type} processed successfully")
-            except Exception as e:
+            except Exception:
                 await db.rollback()
-                logger.error(f"Webhook processing failed: {e}")
-                # Return 200 anyway — if we return 4xx/5xx, Stripe will retry
-                # We don't want retries for permanent errors
+                logger.exception(f"Webhook {event_type} processing failed")
+                # Non-2xx → Stripe retries later. Safe: the handlers are idempotent.
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Webhook processing failed",
+                )
 
     # Always return 200 to acknowledge receipt
     # Stripe will retry if it doesn't get a 2xx within 30 seconds

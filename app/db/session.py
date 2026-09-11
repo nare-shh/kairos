@@ -5,11 +5,11 @@ from app.core.config import settings
 
 # create_async_engine creates a connection pool to PostgreSQL
 # pool_pre_ping=True: tests each connection before using it (handles dropped connections)
-# echo=True in dev: prints every SQL query to console so you can see what's happening
+# SQL logging in dev comes from logging_config (sqlalchemy.engine → INFO);
+# echo=True on top of that printed every query twice
 engine = create_async_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    echo=settings.DEBUG,
 )
 
 # async_sessionmaker is a factory — calling AsyncSessionLocal() gives you a session

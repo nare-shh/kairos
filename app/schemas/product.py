@@ -1,8 +1,21 @@
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+SKU_PATTERN = re.compile(r"^[A-Z0-9-]+$")
+
+
+def _validate_image_urls(urls: list[str] | None) -> list[str] | None:
+    """Images are stored as URLs (JSONB array) — no binary uploads."""
+    if urls is None:
+        return urls
+    for url in urls:
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("Image URLs must start with http:// or https://")
+    return urls
 
 
 # ─── Request Schemas ──────────────────────────────────────────────────────────
@@ -20,14 +33,22 @@ class ProductCreateRequest(BaseModel):
     stock_quantity: int = Field(default=0, ge=0)   # ge=0 means >= 0 (can't be negative)
     low_stock_threshold: int = Field(default=10, ge=1)
     category_id: uuid.UUID | None = None
+    images: list[str] = Field(default_factory=list, max_length=10)
     attributes: dict = Field(default_factory=dict)
 
     @field_validator("sku")
     @classmethod
     def sku_format(cls, v: str) -> str:
         """SKU must be uppercase alphanumeric with hyphens only."""
-        cleaned = v.upper().replace(" ", "-")
+        cleaned = v.strip().upper().replace(" ", "-")
+        if not SKU_PATTERN.match(cleaned):
+            raise ValueError("SKU may only contain letters, digits and hyphens")
         return cleaned
+
+    @field_validator("images")
+    @classmethod
+    def image_urls(cls, v: list[str]) -> list[str]:
+        return _validate_image_urls(v)
 
     @model_validator(mode="after")
     def validate_price_range(self) -> "ProductCreateRequest":
@@ -53,11 +74,17 @@ class ProductUpdateRequest(BaseModel):
     stock_quantity: int | None = Field(None, ge=0)
     low_stock_threshold: int | None = Field(None, ge=1)
     category_id: uuid.UUID | None = None
+    images: list[str] | None = Field(None, max_length=10)
     attributes: dict | None = None
 
-    # Price updates are separate (they generate a specific event type)
+    # Safety bounds for the pricing engine (base price has its own endpoint)
     min_price: Decimal | None = Field(None, gt=0)
     max_price: Decimal | None = Field(None, gt=0)
+
+    @field_validator("images")
+    @classmethod
+    def image_urls(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_image_urls(v)
 
 
 class ProductPriceUpdateRequest(BaseModel):
@@ -96,6 +123,7 @@ class ProductResponse(BaseModel):
     min_price: Decimal
     max_price: Decimal
     stock_quantity: int
+    low_stock_threshold: int
     status: str
     is_active: bool
     images: list
@@ -130,3 +158,16 @@ class EventStoreResponse(BaseModel):
     caused_by: str | None
 
     model_config = {"from_attributes": True}
+
+
+class PriceHistoryEntry(BaseModel):
+    """
+    Public price-transparency feed: every price change, without internal details.
+    kind = "dynamic" → Kairos engine adjusted current_price from demand
+    kind = "base"    → the seller changed the base price
+    """
+    occurred_at: datetime
+    kind: str
+    old_price: Decimal | None
+    new_price: Decimal | None
+    demand_level: str | None = None

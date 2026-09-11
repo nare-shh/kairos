@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,17 +37,19 @@ class OrderItemResponse(BaseModel):
 class OrderResponse(BaseModel):
     id: uuid.UUID
     order_number: str
+    user_id: uuid.UUID
     status: str
     subtotal: Decimal
     tax_amount: Decimal
     shipping_amount: Decimal
     total_amount: Decimal
     shipping_address: dict
+    notes: str | None
     items: list[OrderItemResponse]
     created_at: datetime
     paid_at: datetime | None
     # Note: stripe_client_secret intentionally excluded from list response
-    # Only returned on creation (single use)
+    # Only returned on creation (single use) and via GET /orders/{id}/payment
 
     model_config = {"from_attributes": True}
 
@@ -61,6 +64,23 @@ class CheckoutResponse(BaseModel):
     payment_intent_id: str
     amount_to_pay: Decimal
     currency: str = "inr"
+    # True when Stripe isn't configured: pay via POST /orders/{id}/mock-payment
+    mock_payment: bool = False
+
+
+class OrderPaymentResponse(BaseModel):
+    """Lets the customer resume payment for an unpaid order."""
+    order_id: uuid.UUID
+    client_secret: str
+    payment_intent_id: str
+    amount_to_pay: Decimal
+    currency: str = "inr"
+    mock_payment: bool
+
+
+class OrderStatusUpdateRequest(BaseModel):
+    """Admin fulfilment: paid → processing → shipped → delivered."""
+    status: Literal["processing", "shipped", "delivered"]
 
 
 class OrderListResponse(BaseModel):

@@ -18,4 +18,5 @@ EXPOSE 8000
 # Run migrations then start the API
 # Using sh -c avoids ALL shell script / CRLF / permission issues
 # Railway injects $PORT automatically — we use it directly here
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# RELOAD=1 (set by docker-compose for local dev) enables hot reload
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} ${RELOAD:+--reload}"]

@@ -34,6 +34,13 @@ tests/
 *.md
 docs/
 
+# Frontend — runs in its own container / is deployed separately
+frontend/
+node_modules/
+
+# Local database data
+.localdb/
+
 # OS files
 .DS_Store
 Thumbs.db

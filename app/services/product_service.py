@@ -1,20 +1,23 @@
 import uuid
 from math import ceil
-from decimal import Decimal
 from re import sub
 
+import redis.asyncio as aioredis
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.consumers.trending import top_trending
 from app.events.publisher import KafkaTopic, publish_event
+from app.events.store import append_event
 from app.events.types import ProductEvent
 from app.models.category import Category
 from app.models.event_store import EventStore
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import (
+    PriceHistoryEntry,
     ProductCreateRequest,
     ProductListResponse,
     ProductPriceUpdateRequest,
@@ -53,34 +56,27 @@ class ProductService:
         aggregate_id: str,
         event_type: str,
         payload: dict,
-        version: int,
         caused_by: str | None = None,
     ) -> EventStore:
         """
         Core event sourcing method — called by EVERY write operation.
 
-        This is a private helper (_name convention = internal use only).
-        Every service method that changes state calls this FIRST.
-        The event is the source of truth — the product table update comes after.
-
-        Returns the saved EventStore record.
+        Every service method that changes state records an event.
+        The event is the source of truth — the product table is the projection.
+        The version number is computed per product (1, 2, 3, ...).
         """
-        event = EventStore(
-            event_id=uuid.uuid4(),
+        return await append_event(
+            self.db,
             aggregate_type="product",
             aggregate_id=aggregate_id,
             event_type=event_type,
             payload=payload,
-            version=version,
             caused_by=caused_by,
-            metadata_={
+            metadata={
                 "service": "product_service",
                 "version": "1.0",
             },
         )
-        self.db.add(event)
-        await self.db.flush()   # write to DB within the transaction (not committed yet)
-        return event
 
     # ── CREATE ─────────────────────────────────────────────────────────────────
     async def create_product(
@@ -108,24 +104,10 @@ class ProductService:
             )
 
         # 1b. Validate category if provided
-        if data.category_id:
-            cat_result = await self.db.execute(
-                select(Category).where(Category.id == data.category_id)
-            )
-            if not cat_result.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Category {data.category_id} not found",
-                )
+        await self._ensure_category(data.category_id)
 
         # 1c. Build a unique slug (append short UUID if name-based slug conflicts)
-        base_slug = slugify(data.name)
-        slug = base_slug
-        slug_check = await self.db.execute(
-            select(Product).where(Product.slug == slug)
-        )
-        if slug_check.scalar_one_or_none():
-            slug = f"{base_slug}-{str(uuid.uuid4())[:8]}"
+        slug = await self._unique_slug(data.name)
 
         product_id = str(uuid.uuid4())
 
@@ -145,9 +127,9 @@ class ProductService:
                 "stock_quantity": data.stock_quantity,
                 "category_id": str(data.category_id) if data.category_id else None,
                 "seller_id": str(seller.id),
+                "images": data.images,
                 "attributes": data.attributes,
             },
-            version=1,
             caused_by=str(seller.id),
         )
 
@@ -166,6 +148,7 @@ class ProductService:
             low_stock_threshold=data.low_stock_threshold,
             category_id=data.category_id,
             seller_id=seller.id,
+            images=data.images,
             attributes=data.attributes,
             status="active",
             is_active=True,
@@ -235,24 +218,38 @@ class ProductService:
             query = query.where(Product.name.ilike(f"%{search}%"))
             count_query = count_query.where(Product.name.ilike(f"%{search}%"))
 
-        # Get total count (for pagination metadata)
-        total_result = await self.db.execute(count_query)
-        total = total_result.scalar_one()
+        return await self._paginate(query, count_query, page, page_size)
 
-        # Apply pagination
-        offset = (page - 1) * page_size
-        query = query.order_by(Product.created_at.desc()).offset(offset).limit(page_size)
+    # ── READ: Seller's own catalog (includes inactive products) ────────────────
+    async def list_seller_products(
+        self, user: User, page: int = 1, page_size: int = 50
+    ) -> ProductListResponse:
+        """Sellers see all their non-deleted products; admins see every product."""
+        query = select(Product).where(Product.status != "deleted")
+        count_query = select(func.count(Product.id)).where(Product.status != "deleted")
+        if user.role != "admin":
+            query = query.where(Product.seller_id == user.id)
+            count_query = count_query.where(Product.seller_id == user.id)
+        return await self._paginate(query, count_query, page, page_size)
 
-        result = await self.db.execute(query)
-        products = result.scalars().all()
+    # ── READ: Trending (maintained by the Kafka event worker) ─────────────────
+    async def trending(self, redis: aioredis.Redis, limit: int = 8) -> list[ProductResponse]:
+        ranked = await top_trending(redis, limit=limit * 2)   # over-fetch: some may be inactive
+        ids = []
+        for product_id, _ in ranked:
+            try:
+                ids.append(uuid.UUID(product_id))
+            except ValueError:
+                continue
+        if not ids:
+            return []
 
-        return ProductListResponse(
-            items=[ProductResponse.model_validate(p) for p in products],
-            total=total,
-            page=page,
-            page_size=page_size,
-            pages=ceil(total / page_size) if total > 0 else 0,
+        result = await self.db.execute(
+            select(Product).where(Product.id.in_(ids), Product.is_active == True)  # noqa: E712
         )
+        by_id = {str(p.id): p for p in result.scalars().all()}
+        ordered = [by_id[pid] for pid, _ in ranked if pid in by_id]
+        return [ProductResponse.model_validate(p) for p in ordered[:limit]]
 
     # ── UPDATE ─────────────────────────────────────────────────────────────────
     async def update_product(
@@ -265,9 +262,9 @@ class ProductService:
         if data.name is not None and data.name != product.name:
             changes["name"] = {"old": product.name, "new": data.name}
             product.name = data.name
-            product.slug = slugify(data.name)
+            product.slug = await self._unique_slug(data.name, exclude_id=product.id)
 
-        if data.description is not None:
+        if data.description is not None and data.description != product.description:
             changes["description"] = {"old": product.description, "new": data.description}
             product.description = data.description
 
@@ -275,36 +272,57 @@ class ProductService:
             changes["stock_quantity"] = {"old": product.stock_quantity, "new": data.stock_quantity}
             product.stock_quantity = data.stock_quantity
 
-        if data.low_stock_threshold is not None:
+        if data.low_stock_threshold is not None and data.low_stock_threshold != product.low_stock_threshold:
             changes["low_stock_threshold"] = {
                 "old": product.low_stock_threshold,
                 "new": data.low_stock_threshold,
             }
             product.low_stock_threshold = data.low_stock_threshold
 
-        if data.category_id is not None:
+        if data.category_id is not None and data.category_id != product.category_id:
+            await self._ensure_category(data.category_id)
             changes["category_id"] = {
-                "old": str(product.category_id),
+                "old": str(product.category_id) if product.category_id else None,
                 "new": str(data.category_id),
             }
             product.category_id = data.category_id
 
-        if data.attributes is not None:
+        if data.images is not None and data.images != product.images:
+            changes["images"] = {"old": product.images, "new": data.images}
+            product.images = data.images
+
+        if data.attributes is not None and data.attributes != product.attributes:
             changes["attributes"] = {"old": product.attributes, "new": data.attributes}
             product.attributes = data.attributes
+
+        # Pricing-engine safety bounds — validated together against the base price
+        new_min = data.min_price if data.min_price is not None else product.min_price
+        new_max = data.max_price if data.max_price is not None else product.max_price
+        if new_min != product.min_price or new_max != product.max_price:
+            if not (new_min <= product.base_price <= new_max):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Price bounds must satisfy min_price ≤ base_price "
+                        f"({product.base_price}) ≤ max_price"
+                    ),
+                )
+            if new_min != product.min_price:
+                changes["min_price"] = {"old": str(product.min_price), "new": str(new_min)}
+            if new_max != product.max_price:
+                changes["max_price"] = {"old": str(product.max_price), "new": str(new_max)}
+            product.min_price, product.max_price = new_min, new_max
+            # Keep the live price inside the new bounds right away
+            product.current_price = min(max(product.current_price, new_min), new_max)
 
         if not changes:
             # Nothing actually changed — no point creating an event
             return ProductResponse.model_validate(product)
 
-        # Get current event version for this product
-        version = await self._get_next_version(str(product_id))
-
         await self._save_event(
             aggregate_id=str(product_id),
             event_type=ProductEvent.UPDATED,
             payload={"changes": changes},
-            version=version,
             caused_by=str(seller.id),
         )
 
@@ -340,8 +358,6 @@ class ProductService:
                 detail=f"New price {data.new_base_price} exceeds maximum allowed price {product.max_price}",
             )
 
-        version = await self._get_next_version(str(product_id))
-
         # Save event with rich payload — this IS the audit trail
         await self._save_event(
             aggregate_id=str(product_id),
@@ -350,10 +366,9 @@ class ProductService:
                 "old_base_price": str(old_price),
                 "new_base_price": str(data.new_base_price),
                 "reason": data.reason,
-                # current_price is separate — controlled by Kairos pricing engine
+                # current_price is separate — the repricer re-anchors it on the new base
                 "current_price_unchanged": True,
             },
-            version=version,
             caused_by=str(seller.id),
         )
 
@@ -391,8 +406,6 @@ class ProductService:
                 detail=f"Cannot reduce stock below 0. Current: {product.stock_quantity}, Delta: {data.quantity_delta}",
             )
 
-        version = await self._get_next_version(str(product_id))
-
         await self._save_event(
             aggregate_id=str(product_id),
             event_type=ProductEvent.STOCK_UPDATED,
@@ -403,7 +416,6 @@ class ProductService:
                 "reason": data.reason,
                 "is_low_stock": new_qty <= product.low_stock_threshold,
             },
-            version=version,
             caused_by=str(seller.id),
         )
 
@@ -412,12 +424,70 @@ class ProductService:
         await self.db.refresh(product)
         return ProductResponse.model_validate(product)
 
-    # ── GET EVENT HISTORY ─────────────────────────────────────────────────────
-    async def get_product_events(self, product_id: uuid.UUID) -> list[EventStore]:
+    # ── ACTIVATE / DEACTIVATE ─────────────────────────────────────────────────
+    async def set_active(
+        self, product_id: uuid.UUID, active: bool, seller: User
+    ) -> ProductResponse:
+        """Hide a product from the storefront (or bring it back) without losing history."""
+        product = await self._get_owned_product(product_id, seller)
+        if product.is_active == active:
+            return ProductResponse.model_validate(product)
+
+        event_type = ProductEvent.ACTIVATED if active else ProductEvent.DEACTIVATED
+        await self._save_event(
+            aggregate_id=str(product_id),
+            event_type=event_type,
+            payload={"old_status": product.status, "new_status": "active" if active else "inactive"},
+            caused_by=str(seller.id),
+        )
+        product.is_active = active
+        product.status = "active" if active else "inactive"
+
+        await publish_event(
+            topic=KafkaTopic.PRODUCT_EVENTS,
+            event_type=event_type,
+            aggregate_id=str(product_id),
+            payload={"product_id": str(product_id)},
+            caused_by=str(seller.id),
+        )
+
+        await self.db.flush()
+        await self.db.refresh(product)
+        return ProductResponse.model_validate(product)
+
+    # ── DELETE (soft) ─────────────────────────────────────────────────────────
+    async def delete_product(self, product_id: uuid.UUID, seller: User) -> None:
         """
-        Return the complete event history for a product.
+        Soft delete: the row stays because past orders reference it (FK RESTRICT)
+        and its event history must remain queryable.
+        """
+        product = await self._get_owned_product(product_id, seller)
+
+        await self._save_event(
+            aggregate_id=str(product_id),
+            event_type=ProductEvent.DELETED,
+            payload={"sku": product.sku, "old_status": product.status},
+            caused_by=str(seller.id),
+        )
+        product.is_active = False
+        product.status = "deleted"
+
+        await publish_event(
+            topic=KafkaTopic.PRODUCT_EVENTS,
+            event_type=ProductEvent.DELETED,
+            aggregate_id=str(product_id),
+            payload={"product_id": str(product_id)},
+            caused_by=str(seller.id),
+        )
+        await self.db.flush()
+
+    # ── GET EVENT HISTORY ─────────────────────────────────────────────────────
+    async def get_product_events(self, product_id: uuid.UUID, user: User) -> list[EventStore]:
+        """
+        Return the complete event history for a product (owner or admin only).
         This is event sourcing's superpower — the full audit trail on demand.
         """
+        await self._get_owned_product(product_id, user, include_deleted=True)
         result = await self.db.execute(
             select(EventStore)
             .where(
@@ -428,8 +498,83 @@ class ProductService:
         )
         return result.scalars().all()
 
+    # ── PUBLIC PRICE HISTORY ──────────────────────────────────────────────────
+    async def get_price_history(
+        self, product_id: uuid.UUID, limit: int = 30
+    ) -> list[PriceHistoryEntry]:
+        """Every price change for an active product, newest first — shown to all shoppers."""
+        await self.get_product(product_id)   # 404 unless active
+
+        result = await self.db.execute(
+            select(EventStore)
+            .where(
+                EventStore.aggregate_type == "product",
+                EventStore.aggregate_id == str(product_id),
+                EventStore.event_type == ProductEvent.PRICE_CHANGED,
+            )
+            .order_by(EventStore.id.desc())
+            .limit(limit)
+        )
+
+        entries = []
+        for event in result.scalars().all():
+            payload = event.payload or {}
+            if "new_base_price" in payload:   # seller changed the base price
+                entries.append(PriceHistoryEntry(
+                    occurred_at=event.occurred_at,
+                    kind="base",
+                    old_price=payload.get("old_base_price"),
+                    new_price=payload.get("new_base_price"),
+                ))
+            else:                             # Kairos engine moved current_price
+                entries.append(PriceHistoryEntry(
+                    occurred_at=event.occurred_at,
+                    kind="dynamic",
+                    old_price=payload.get("old_price"),
+                    new_price=payload.get("new_price"),
+                    demand_level=payload.get("demand_level"),
+                ))
+        return entries
+
     # ── Private Helpers ───────────────────────────────────────────────────────
-    async def _get_owned_product(self, product_id: uuid.UUID, seller: User) -> Product:
+    async def _paginate(self, query, count_query, page: int, page_size: int) -> ProductListResponse:
+        # Get total count (for pagination metadata)
+        total = (await self.db.execute(count_query)).scalar_one()
+
+        # Apply pagination
+        offset = (page - 1) * page_size
+        query = query.order_by(Product.created_at.desc()).offset(offset).limit(page_size)
+        products = (await self.db.execute(query)).scalars().all()
+
+        return ProductListResponse(
+            items=[ProductResponse.model_validate(p) for p in products],
+            total=total,
+            page=page,
+            page_size=page_size,
+            pages=ceil(total / page_size) if total > 0 else 0,
+        )
+
+    async def _ensure_category(self, category_id: uuid.UUID | None) -> None:
+        if category_id is None:
+            return
+        result = await self.db.execute(select(Category.id).where(Category.id == category_id))
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Category {category_id} not found",
+            )
+
+    async def _unique_slug(self, name: str, exclude_id: uuid.UUID | None = None) -> str:
+        base_slug = slugify(name) or "product"
+        query = select(Product.id).where(Product.slug == base_slug)
+        if exclude_id is not None:
+            query = query.where(Product.id != exclude_id)
+        taken = (await self.db.execute(query)).scalar_one_or_none()
+        return f"{base_slug}-{str(uuid.uuid4())[:8]}" if taken else base_slug
+
+    async def _get_owned_product(
+        self, product_id: uuid.UUID, seller: User, include_deleted: bool = False
+    ) -> Product:
         """
         Fetch a product AND verify the requesting user owns it.
         Admins can access any product; sellers only their own.
@@ -439,7 +584,7 @@ class ProductService:
         )
         product = result.scalar_one_or_none()
 
-        if not product:
+        if not product or (product.status == "deleted" and not include_deleted):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
         # Authorization check: seller can only modify their own products
@@ -449,15 +594,3 @@ class ProductService:
                 detail="You don't have permission to modify this product",
             )
         return product
-
-    async def _get_next_version(self, aggregate_id: str) -> int:
-        """Get the next version number for an aggregate's events."""
-        result = await self.db.execute(
-            select(func.max(EventStore.version))
-            .where(
-                EventStore.aggregate_type == "product",
-                EventStore.aggregate_id == aggregate_id,
-            )
-        )
-        current_max = result.scalar_one_or_none()
-        return (current_max or 0) + 1

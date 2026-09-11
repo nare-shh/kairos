@@ -22,6 +22,7 @@ async def close_redis() -> None:
     global _redis_client
     if _redis_client:
         await _redis_client.aclose()
+        _redis_client = None
 
 
 def get_redis() -> aioredis.Redis:
@@ -31,4 +32,9 @@ def get_redis() -> aioredis.Redis:
     """
     if _redis_client is None:
         raise RuntimeError("Redis not initialized. Call init_redis() first.")
+    return _redis_client
+
+
+def get_redis_or_none() -> aioredis.Redis | None:
+    """For best-effort side effects (e.g. demand signals from webhooks)."""
     return _redis_client

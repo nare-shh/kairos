@@ -31,6 +31,9 @@ def get_url() -> str:
     url = os.getenv("DATABASE_URL", "")
     # Strip the asyncpg driver prefix — psycopg2 is the default sync driver
     url = url.replace("postgresql+asyncpg://", "postgresql://")
+    # Railway/Heroku style postgres:// isn't accepted by SQLAlchemy
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     return url
 
 

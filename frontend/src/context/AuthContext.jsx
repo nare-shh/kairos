@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import { authAPI } from '../api/client'
+import { authAPI, tokens } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -8,21 +8,40 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('kairos_token')
-    if (token) {
-      authAPI.me()
-        .then(r => setUser(r.data))
-        .catch(() => localStorage.clear())
-        .finally(() => setLoading(false))
-    } else {
+    if (!tokens.access()) {
       setLoading(false)
+      return
+    }
+    let cancelled = false
+    let retryTimer
+
+    const load = async (attempt = 1) => {
+      try {
+        const { data } = await authAPI.me()
+        if (!cancelled) setUser(data)
+      } catch (err) {
+        const status = err.response?.status
+        if (status === 401 || status === 403) {
+          tokens.clear()                     // the session really is invalid
+        } else if (attempt < 3) {
+          // API briefly unreachable (e.g. restarting) — keep the session and retry
+          retryTimer = setTimeout(() => load(attempt + 1), 1500)
+          return
+        }
+      }
+      if (!cancelled) setLoading(false)
+    }
+
+    load()
+    return () => {
+      cancelled = true
+      clearTimeout(retryTimer)
     }
   }, [])
 
   const login = async (email, password) => {
     const { data } = await authAPI.login({ email, password })
-    localStorage.setItem('kairos_token',   data.access_token)
-    localStorage.setItem('kairos_refresh', data.refresh_token)
+    tokens.set(data.access_token, data.refresh_token)
     const me = await authAPI.me()
     setUser(me.data)
     return me.data
@@ -34,7 +53,7 @@ export function AuthProvider({ children }) {
   }
 
   const logout = () => {
-    localStorage.clear()
+    tokens.clear()
     setUser(null)
   }
 

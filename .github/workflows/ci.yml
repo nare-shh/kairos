@@ -23,10 +23,29 @@ on:
 
 jobs:
   test:
-    name: Run Tests
+    name: Backend Tests
     # runs-on: which OS to use for the runner
     # ubuntu-latest = GitHub's free Linux servers
     runs-on: ubuntu-latest
+
+    # A real PostgreSQL for the API tests (Redis is faked in-memory by fakeredis)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kairos_user
+          POSTGRES_PASSWORD: kairos_pass
+          POSTGRES_DB: kairos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kairos_user -d kairos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://kairos_user:kairos_pass@localhost:5432/kairos_test
 
     steps:
       # ── Step 1: Get the code ───────────────────────────────────────────────
@@ -49,16 +68,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ── Step 4: Create a minimal .env for tests ───────────────────────────
-      # Tests need these env vars to import the app without crashing
+      # ── Step 4: Create a minimal .env ─────────────────────────────────────
+      # The import check below needs these env vars to import the app
       - name: Create test environment file
         run: |
           cat > .env << 'EOF'
           APP_NAME=Kairos
           APP_ENV=test
           DEBUG=true
-          DATABASE_URL=postgresql+asyncpg://test:test@localhost:5432/test_db
+          DATABASE_URL=postgresql+asyncpg://kairos_user:kairos_pass@localhost:5432/kairos_test
           REDIS_URL=redis://localhost:6379
+          KAFKA_ENABLED=false
           KAFKA_BOOTSTRAP_SERVERS=localhost:9092
           SECRET_KEY=test-secret-key-for-ci-only-not-real
           ALGORITHM=HS256
@@ -68,26 +88,51 @@ jobs:
           STRIPE_WEBHOOK_SECRET=whsec_placeholder
           EOF
 
-      # ── Step 5: Run unit tests ────────────────────────────────────────────
-      # We run UNIT tests here — no DB, no Redis, no Kafka needed
-      # Unit tests test pure logic in isolation (like our pricing engine tests)
-      - name: Run unit tests
+      # ── Step 5: Run the test suite ────────────────────────────────────────
+      # Unit tests (pricing math, scoring, trending) + API integration tests
+      # (auth, products, pricing, cart, checkout, payments, fulfilment)
+      # against the Postgres service above — migrated with Alembic first.
+      - name: Run tests
         run: |
           pytest tests/ -v --tb=short
-        # Note: integration tests (which need a real DB) would run separately
-        # using services: postgres / redis in the job definition
 
       # ── Step 6: Verify all imports work ───────────────────────────────────
       # Catches syntax errors and missing imports that tests might not catch
       - name: Check application imports
         run: |
           python -c "
-          from app.core.config import settings
-          from app.core.security import hash_password, verify_password, create_access_token
+          from app.main import app
+          from app.consumers.worker import run
+          from app.seed import main
           from app.services.pricing_engine import PricingEngine, DEMAND_BANDS, INTENT_WEIGHTS
           from app.events.types import ProductEvent, OrderEvent, IntentEvent
           print('All imports OK')
           "
+
+  # ── Separate job: Frontend build ──────────────────────────────────────────
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
 
   # ── Separate job: Docker build check ──────────────────────────────────────
   docker-build:
@@ -115,8 +160,8 @@ jobs:
       - name: Verify image starts
         run: |
           # Start the container with a health check command instead of the full app
-          # We just verify the image can start and Python can import the app
+          # We just verify the image can start and Python can import the app + worker
           docker run --rm \
             --env-file .env \
             kairos:ci-check \
-            python -c "from app.main import app; print('App imports OK')"
+            python -c "from app.main import app; from app.consumers.worker import run; print('App imports OK')"
