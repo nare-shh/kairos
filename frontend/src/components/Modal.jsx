@@ -11,23 +11,22 @@ export default function Modal({ title, onClose, children, wide = false }) {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto"
+      className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-4 bg-ink/30 backdrop-blur-sm overflow-y-auto"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} my-8 bg-surface-800 border border-surface-600 rounded-2xl shadow-2xl animate-slide-up`}
+        className={`w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} my-8 bg-paper-50 border border-line rounded-2xl shadow-xl shadow-ink/5 animate-slide-up`}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-surface-700">
-          <h2 className="font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Close"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-700 transition-colors">
+        <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-line">
+          <h2 className="display text-xl">{title}</h2>
+          <button onClick={onClose} aria-label="Close" className="btn-quiet">
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-6">{children}</div>
       </div>
     </div>
   )

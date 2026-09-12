@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ShoppingCart, TrendingUp, TrendingDown } from 'lucide-react'
+import { ArrowUpRight, TrendingUp, TrendingDown } from 'lucide-react'
 import clsx from 'clsx'
 import ProductImage from './ProductImage'
 import { useCart } from '../context/CartContext'
@@ -12,62 +12,56 @@ export default function ProductCard({ product }) {
   const base = Number(product.base_price)
   const isOnSale = current < base
   const isSurge  = current > base
-  const lowStock = product.stock_quantity > 0 && product.stock_quantity <= product.low_stock_threshold
+  const soldOut  = product.stock_quantity === 0
+  const lowStock = !soldOut && product.stock_quantity <= product.low_stock_threshold
 
   return (
-    <div className="group bg-surface-800 rounded-xl border border-surface-700 hover:border-brand-600/50 transition-all duration-200 hover:shadow-lg hover:shadow-brand-600/5 flex flex-col overflow-hidden">
-
-      <Link to={`/products/${product.id}`} className="relative">
-        <ProductImage product={product} className="w-full h-48" />
-        {lowStock && (
-          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-amber-500/90 text-[11px] font-semibold text-black">
-            Only {product.stock_quantity} left
+    <article className="group flex flex-col bg-paper-50 border border-line rounded-2xl overflow-hidden transition-colors hover:border-line-strong">
+      <Link to={`/products/${product.id}`} className="relative block">
+        <ProductImage product={product} className="w-full h-52" textClass="text-6xl" />
+        {(lowStock || soldOut) && (
+          <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-paper-50/95 border border-line text-[10px] uppercase tracking-caps text-ink-700">
+            {soldOut ? 'Sold out' : `Only ${product.stock_quantity} left`}
           </span>
         )}
       </Link>
 
-      <div className="p-4 flex flex-col gap-3 flex-1">
-
-        {/* Name + SKU */}
+      <div className="flex flex-col gap-3 p-5 flex-1">
         <div>
+          <p className="eyebrow mb-1">{product.sku}</p>
           <Link to={`/products/${product.id}`}
-            className="font-semibold text-sm leading-snug hover:text-brand-500 transition-colors line-clamp-2">
+            className="display text-xl leading-snug line-clamp-2 transition-colors hover:text-sage-700">
             {product.name}
           </Link>
-          <p className="text-xs text-slate-500 mt-0.5">{product.sku}</p>
         </div>
 
-        {/* Price */}
-        <div className="flex items-baseline gap-2">
-          <span className={clsx(
-            'text-xl font-bold tabular-nums transition-colors',
-            isSurge && 'text-red-400',
-            isOnSale && 'text-emerald-400',
-          )}>
+        <div className="flex items-baseline gap-2 mt-auto">
+          <span className={clsx('display text-2xl tabular-nums', isSurge && 'text-flag-up', isOnSale && 'text-sage-700')}>
             {inr(current)}
           </span>
           {(isOnSale || isSurge) && (
-            <span className="text-xs text-slate-500 line-through tabular-nums">{inr(base)}</span>
+            <>
+              <span className="text-xs text-ink-400 line-through tabular-nums">{inr(base)}</span>
+              {isSurge
+                ? <TrendingUp className="w-3.5 h-3.5 text-flag-up" />
+                : <TrendingDown className="w-3.5 h-3.5 text-sage-600" />}
+            </>
           )}
-          {isSurge && <TrendingUp className="w-3.5 h-3.5 text-red-400" />}
-          {isOnSale && <TrendingDown className="w-3.5 h-3.5 text-emerald-400" />}
         </div>
 
-        {/* Stock */}
-        <p className={clsx('text-xs', product.stock_quantity > 0 ? 'text-slate-400' : 'text-red-400')}>
-          {product.stock_quantity > 0 ? `${product.stock_quantity} in stock` : 'Out of stock'}
-        </p>
-
-        {/* Add to cart */}
-        <button
-          onClick={() => addToCart(product.id)}
-          disabled={product.stock_quantity === 0}
-          className="mt-auto flex items-center justify-center gap-2 w-full py-2 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors">
-          <ShoppingCart className="w-4 h-4" />
-          Add to Cart
-        </button>
-
+        <div className="flex items-center justify-between gap-3 pt-3 border-t border-line">
+          <span className="text-xs text-ink-500">
+            {soldOut ? 'Out of stock' : `${product.stock_quantity} in stock`}
+          </span>
+          <button
+            onClick={() => addToCart(product.id)}
+            disabled={soldOut}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink transition-colors hover:text-sage-700 disabled:opacity-40 disabled:cursor-not-allowed">
+            Add to cart
+            <ArrowUpRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+          </button>
+        </div>
       </div>
-    </div>
+    </article>
   )
 }

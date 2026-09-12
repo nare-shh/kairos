@@ -4,35 +4,38 @@ export default {
   theme: {
     extend: {
       colors: {
-        brand: {
-          50:  '#f0f4ff',
-          500: '#6366f1',
-          600: '#4f46e5',
-          700: '#4338ca',
-        },
-        surface: {
-          900: '#0f0f13',
-          800: '#16161d',
-          700: '#1e1e28',
-          600: '#262633',
-        }
+        // Editorial paper palette: warm off-white surfaces, near-black ink,
+        // sage green for actions, clay for imagery.
+        paper: { 50: '#FDFCFA', 100: '#F7F5F0', 200: '#F0EDE5', 300: '#E7E2D7' },
+        line:  { DEFAULT: '#DFD9CC', strong: '#CDC5B4' },
+        ink:   { DEFAULT: '#16170F', 700: '#34352C', 500: '#6E6F63', 400: '#94958A' },
+        sage:  { 100: '#E6EBDD', 300: '#BCC7A6', 500: '#7E8F62', 600: '#647550', 700: '#4A5839', 900: '#212A18' },
+        clay:  { 100: '#EFE4D5', 300: '#DCC6AC', 500: '#96683A' },
+        // Price and stock signals
+        flag:  { up: '#9B3B2F', down: '#647550', warn: '#9A6318' },
+      },
+      fontFamily: {
+        display: ['"Instrument Serif"', 'Georgia', 'Cambria', 'serif'],
+        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+      },
+      letterSpacing: {
+        caps: '0.14em',
       },
       animation: {
-        'price-flash': 'priceFlash 0.6s ease-in-out',
-        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'slide-up': 'slideUp 0.3s ease-out',
+        'price-flash': 'priceFlash 0.8s ease-in-out',
+        'slide-up': 'slideUp 0.35s ease-out',
       },
       keyframes: {
         priceFlash: {
           '0%':   { color: 'inherit' },
-          '30%':  { color: '#22c55e', transform: 'scale(1.08)' },
+          '30%':  { color: '#647550', transform: 'scale(1.04)' },
           '100%': { color: 'inherit', transform: 'scale(1)' },
         },
         slideUp: {
           '0%':   { opacity: '0', transform: 'translateY(10px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
-        }
-      }
+        },
+      },
     },
   },
   plugins: [],

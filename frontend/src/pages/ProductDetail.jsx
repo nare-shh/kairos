@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, ShoppingCart, TrendingUp, TrendingDown, Minus, Plus, Clock } from 'lucide-react'
+import { ArrowLeft, Minus, Plus, TrendingUp, TrendingDown } from 'lucide-react'
 import clsx from 'clsx'
 import { errorMessage, productsAPI, trackIntent } from '../api/client'
 import { useLivePrice } from '../hooks/useLivePrice'
@@ -53,21 +53,21 @@ export default function ProductDetail() {
   }, [id, price])
 
   if (loading) return (
-    <div className="max-w-5xl mx-auto px-4 py-16 animate-pulse">
-      <div className="h-6 bg-surface-700 rounded w-32 mb-8" />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-        <div className="h-96 bg-surface-700 rounded-2xl" />
-        <div className="space-y-4">
-          {[...Array(5)].map((_, i) => <div key={i} className="h-6 bg-surface-700 rounded" />)}
+    <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 animate-pulse">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-14">
+        <div className="aspect-[4/5] rounded-2xl bg-paper-200" />
+        <div className="space-y-5 pt-6">
+          {[...Array(6)].map((_, i) => <div key={i} className="h-5 bg-paper-200 rounded" />)}
         </div>
       </div>
     </div>
   )
 
   if (!product) return (
-    <div className="text-center py-24 text-slate-500">
-      <p className="mb-4">{loadError || 'Product not found.'}</p>
-      <Link to="/" className="text-brand-500 hover:underline">Back to products</Link>
+    <div className="max-w-2xl mx-auto px-5 py-28 text-center">
+      <h1 className="display text-4xl mb-3">{loadError ? 'Something went wrong.' : 'Product not found.'}</h1>
+      {loadError && <p className="text-ink-500 mb-6">{loadError}</p>}
+      <Link to="/" className="btn-ghost">Back to products</Link>
     </div>
   )
 
@@ -80,146 +80,127 @@ export default function ProductDetail() {
   const lowStock     = inStock && product.stock_quantity <= product.low_stock_threshold
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 animate-slide-up">
-
-      {/* Back */}
-      <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-white mb-8 transition-colors">
-        <ArrowLeft className="w-4 h-4" /> Back to products
+    <div className="max-w-6xl mx-auto px-5 sm:px-8 py-12 animate-slide-up">
+      <Link to="/" className="inline-flex items-center gap-2 eyebrow mb-10 hover:text-ink transition-colors">
+        <ArrowLeft className="w-3.5 h-3.5" /> All products
       </Link>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-12 lg:gap-16">
         {/* Image */}
-        <ProductImage product={product} className="h-80 md:h-full min-h-64 w-full rounded-2xl" textClass="text-8xl" />
+        <ProductImage product={product} className="w-full aspect-[4/5] rounded-2xl" textClass="text-8xl" />
 
-        {/* Info */}
-        <div className="flex flex-col gap-5">
-
-          <div>
-            <div className="flex items-start justify-between gap-2 mb-1">
-              <h1 className="text-2xl font-bold leading-tight">{product.name}</h1>
-              {demand && <DemandBadge level={demand} />}
-            </div>
-            <p className="text-sm text-slate-500">SKU: {product.sku}</p>
+        {/* Details */}
+        <div className="flex flex-col">
+          <div className="flex items-start justify-between gap-4">
+            <p className="eyebrow">{product.sku}</p>
+            {demand && <DemandBadge level={demand} />}
           </div>
 
-          {/* Live Price */}
-          <div className="bg-surface-700 rounded-xl p-4 border border-surface-600">
-            <p className="text-xs text-slate-500 mb-1 uppercase tracking-wider">Current Price</p>
-            <div className="flex items-baseline gap-3">
+          <h1 className="display text-4xl sm:text-5xl leading-[1.05] mt-4">{product.name}</h1>
+
+          {/* Live price */}
+          <div className="mt-8 pb-6 border-b border-line">
+            <p className="eyebrow mb-3">Current price</p>
+            <div className="flex flex-wrap items-baseline gap-4">
               <span className={clsx(
-                'text-4xl font-extrabold tabular-nums transition-all duration-300 inline-block',
-                flashing && 'text-emerald-400 scale-110',
-                isSurge && !flashing && 'text-red-400',
-                isOnSale && !flashing && 'text-emerald-400',
-                !isSurge && !isOnSale && !flashing && 'text-white',
+                'display text-5xl tabular-nums transition-all duration-300 inline-block',
+                flashing && 'text-sage-600 scale-105',
+                isSurge && !flashing && 'text-flag-up',
+                isOnSale && !flashing && 'text-sage-700',
               )}>
                 {inr(currentPrice)}
               </span>
               {(isSurge || isOnSale) && (
-                <div className="flex flex-col">
-                  <span className="text-sm text-slate-500 line-through tabular-nums">{inr(basePrice)}</span>
-                  <span className={clsx('text-xs font-semibold flex items-center gap-0.5', isSurge ? 'text-red-400' : 'text-emerald-400')}>
-                    {isSurge ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                <span className="flex items-center gap-2 text-sm">
+                  <span className="text-ink-400 line-through tabular-nums">{inr(basePrice)}</span>
+                  <span className={clsx('inline-flex items-center gap-1', isSurge ? 'text-flag-up' : 'text-sage-700')}>
+                    {isSurge ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
                     {isSurge ? '+' : ''}{priceDiff}% vs base
                   </span>
-                </div>
+                </span>
               )}
             </div>
+            <p className="flex items-center gap-2 mt-4 text-xs text-ink-500">
+              <span className={clsx('w-1.5 h-1.5 rounded-full', connected ? 'bg-sage-500 animate-pulse' : 'bg-ink-400')} />
+              {connected ? 'Live — this price updates as demand changes' : 'Connecting to live pricing…'}
+            </p>
+          </div>
 
-            <div className="flex items-center gap-1.5 mt-2">
-              <span className={clsx('w-1.5 h-1.5 rounded-full', connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600')} />
-              <span className="text-xs text-slate-500">
-                {connected ? 'Live pricing active — updates in real-time' : 'Connecting to live pricing…'}
-              </span>
+          {/* Meta rows */}
+          <dl className="divide-y divide-line border-b border-line">
+            <div className="flex items-center justify-between gap-4 py-3.5">
+              <dt className="eyebrow">Availability</dt>
+              <dd className={clsx('text-sm', inStock ? 'text-ink' : 'text-flag-up')}>
+                {inStock ? `${product.stock_quantity} in stock` : 'Out of stock'}
+                {lowStock && <span className="text-flag-warn"> · only {product.stock_quantity} left</span>}
+              </dd>
             </div>
-          </div>
+            <div className="flex items-center justify-between gap-4 py-3.5">
+              <dt className="eyebrow">Price range</dt>
+              <dd className="text-sm tabular-nums text-ink-700">{inr(product.min_price)} – {inr(product.max_price)}</dd>
+            </div>
+            {Object.entries(product.attributes || {}).map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between gap-4 py-3.5">
+                <dt className="eyebrow">{k}</dt>
+                <dd className="text-sm text-ink-700">{String(v)}</dd>
+              </div>
+            ))}
+          </dl>
 
-          {/* Stock */}
-          <div className="flex items-center gap-2 text-sm">
-            <span className={clsx('font-medium', inStock ? 'text-emerald-400' : 'text-red-400')}>
-              {inStock ? `✓ ${product.stock_quantity} units in stock` : '✗ Out of stock'}
-            </span>
-            {lowStock && (
-              <span className="px-2 py-0.5 bg-amber-500/10 text-amber-400 text-xs rounded-full border border-amber-500/20">
-                Only {product.stock_quantity} left!
-              </span>
-            )}
-          </div>
-
-          {/* Description */}
           {product.description && (
-            <p className="text-sm text-slate-400 leading-relaxed">{product.description}</p>
+            <p className="text-ink-500 leading-relaxed mt-6">{product.description}</p>
           )}
 
-          {/* Attributes */}
-          {Object.keys(product.attributes || {}).length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(product.attributes).map(([k, v]) => (
-                <span key={k} className="px-2.5 py-1 bg-surface-700 rounded-lg text-xs text-slate-400 border border-surface-600">
-                  <span className="text-slate-500">{k}:</span> {String(v)}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Quantity + Add to Cart */}
-          <div className="flex items-center gap-3 mt-2">
-            <div className="flex items-center gap-0 bg-surface-700 border border-surface-600 rounded-xl overflow-hidden">
-              <button onClick={() => setQuantity(q => Math.max(1, q - 1))} disabled={!inStock} aria-label="Decrease quantity"
-                className="px-3 py-2.5 hover:bg-surface-600 disabled:opacity-40 transition-colors">
+          {/* Quantity + add to cart */}
+          <div className="flex items-center gap-3 mt-8">
+            <div className="flex items-center border border-line rounded-full overflow-hidden">
+              <button onClick={() => setQuantity(q => Math.max(1, q - 1))} disabled={!inStock}
+                aria-label="Decrease quantity"
+                className="px-3.5 py-2.5 text-ink-500 hover:text-ink hover:bg-paper-200 disabled:opacity-40 transition-colors">
                 <Minus className="w-4 h-4" />
               </button>
-              <span className="w-10 text-center text-sm font-semibold">{inStock ? quantity : 0}</span>
-              <button onClick={() => setQuantity(q => Math.min(product.stock_quantity, q + 1))} disabled={!inStock} aria-label="Increase quantity"
-                className="px-3 py-2.5 hover:bg-surface-600 disabled:opacity-40 transition-colors">
+              <span className="w-10 text-center text-sm tabular-nums">{inStock ? quantity : 0}</span>
+              <button onClick={() => setQuantity(q => Math.min(product.stock_quantity, q + 1))} disabled={!inStock}
+                aria-label="Increase quantity"
+                className="px-3.5 py-2.5 text-ink-500 hover:text-ink hover:bg-paper-200 disabled:opacity-40 transition-colors">
                 <Plus className="w-4 h-4" />
               </button>
             </div>
-
-            <button
-              onClick={() => addToCart(product.id, quantity)}
-              disabled={!inStock}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-medium transition-colors">
-              <ShoppingCart className="w-4 h-4" />
-              Add to Cart · {inr(currentPrice * quantity)}
+            <button onClick={() => addToCart(product.id, quantity)} disabled={!inStock}
+              className="btn-primary flex-1 py-3">
+              Add to cart · {inr(currentPrice * quantity)}
             </button>
           </div>
-
         </div>
       </div>
 
-      {/* Price History (public event log) */}
+      {/* Price history — the public audit trail */}
       {history.length > 0 && (
-        <section className="mt-14">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Clock className="w-4 h-4" /> Price History
-          </h2>
-          <div className="space-y-2">
+        <section className="mt-24">
+          <div className="flex items-baseline gap-3 pb-3 border-b border-line-strong">
+            <h2 className="display text-3xl">Price history</h2>
+            <span className="eyebrow">Every change, and what caused it</span>
+          </div>
+          <ol className="divide-y divide-line">
             {history.slice(0, 10).map((h, i) => (
-              <div key={`${h.occurred_at}-${i}`} className="flex flex-wrap items-center gap-3 p-3 bg-surface-800 border border-surface-700 rounded-xl text-sm">
-                <span className={clsx(
-                  'px-2 py-0.5 rounded text-xs font-medium',
-                  h.kind === 'dynamic'
-                    ? 'bg-brand-600/20 text-brand-500 border border-brand-600/20'
-                    : 'bg-slate-700 text-slate-400'
-                )}>
-                  {h.kind === 'dynamic' ? '⚡ Kairos' : '👤 Seller'}
+              <li key={`${h.occurred_at}-${i}`} className="flex flex-wrap items-center gap-x-6 gap-y-2 py-5">
+                <span className="eyebrow w-8 flex-shrink-0">{String(i + 1).padStart(2, '0')}</span>
+                <span className="display text-xl tabular-nums">
+                  {inr(h.old_price)} <span className="text-ink-400">&rarr;</span> {inr(h.new_price)}
                 </span>
-                <span className="text-slate-300 tabular-nums">
-                  {inr(h.old_price)} → {inr(h.new_price)}
+                <span className={clsx('text-[11px] uppercase tracking-caps px-2 py-0.5 rounded-full border',
+                  h.kind === 'dynamic' ? 'border-sage-300 text-sage-700 bg-sage-100' : 'border-line text-ink-500')}>
+                  {h.kind === 'dynamic' ? 'Kairos engine' : 'Seller'}
                 </span>
-                {h.kind === 'base' && <span className="text-slate-500 text-xs">base price changed</span>}
                 {h.demand_level && <DemandBadge level={h.demand_level} />}
-                <span className="text-slate-600 text-xs ml-auto whitespace-nowrap">
+                <span className="text-xs text-ink-400 ml-auto whitespace-nowrap">
                   {new Date(h.occurred_at).toLocaleString()}
                 </span>
-              </div>
+              </li>
             ))}
-          </div>
+          </ol>
         </section>
       )}
-
     </div>
   )
 }
