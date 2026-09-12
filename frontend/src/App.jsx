@@ -9,23 +9,36 @@ import Orders from './pages/Orders'
 import Auth from './pages/Auth'
 import Dashboard from './pages/Dashboard'
 
+function Footer() {
+  return (
+    <footer className="mt-24 border-t border-line">
+      <div className="max-w-7xl mx-auto px-5 sm:px-8 py-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <p className="display text-xl">Kairos</p>
+          <p className="text-sm text-ink-500 mt-1">Prices that move with demand, in real time.</p>
+        </div>
+        <p className="eyebrow">Intent-driven pricing engine</p>
+      </div>
+    </footer>
+  )
+}
+
 function NotFound() {
   return (
-    <div className="text-center py-24">
-      <p className="text-5xl font-black text-surface-600 mb-3">404</p>
-      <p className="text-slate-400 mb-6">This page doesn't exist.</p>
-      <Link to="/" className="px-5 py-2.5 bg-brand-600 hover:bg-brand-700 rounded-xl text-sm font-medium transition-colors">
-        Back to the store
-      </Link>
+    <div className="max-w-3xl mx-auto px-5 py-28 text-center">
+      <p className="eyebrow mb-4">Error 404</p>
+      <h1 className="display text-5xl sm:text-6xl mb-4">This page moved on.</h1>
+      <p className="text-ink-500 mb-8">The page you were looking for does not exist.</p>
+      <Link to="/" className="btn-primary">Back to the store</Link>
     </div>
   )
 }
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-surface-900 text-white">
+    <div className="min-h-screen flex flex-col bg-paper-100 text-ink">
       <Navbar />
-      <main>
+      <main className="flex-1">
         <Routes>
           <Route path="/"               element={<Home />} />
           <Route path="/products/:id"   element={<ProductDetail />} />
@@ -37,6 +50,7 @@ export default function App() {
           <Route path="*"               element={<NotFound />} />
         </Routes>
       </main>
+      <Footer />
     </div>
   )
 }

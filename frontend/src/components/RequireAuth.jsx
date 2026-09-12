@@ -1,5 +1,4 @@
 import { Navigate, useLocation } from 'react-router-dom'
-import { ShieldAlert } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { PageLoader } from './ui'
 
@@ -12,9 +11,10 @@ export default function RequireAuth({ roles, children }) {
   if (!user) return <Navigate to="/auth" replace state={{ from: location.pathname }} />
   if (roles && !roles.includes(user.role)) {
     return (
-      <div className="text-center py-24 text-slate-500">
-        <ShieldAlert className="w-10 h-10 mx-auto mb-3 opacity-50" />
-        <p>This page is only available to {roles.join(' / ')} accounts.</p>
+      <div className="max-w-2xl mx-auto px-5 py-28 text-center">
+        <p className="eyebrow mb-4">Restricted</p>
+        <h1 className="display text-4xl mb-3">Sellers only.</h1>
+        <p className="text-ink-500">This page is available to {roles.join(' and ')} accounts.</p>
       </div>
     )
   }
